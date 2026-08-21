@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       # ansible-core provides ansible-galaxy for the collection build that
       # @semantic-release/exec runs during prepare (see .releaserc.js).
