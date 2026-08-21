@@ -34,7 +34,4 @@ jobs:
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Ansible Galaxy publish (disabled): uncomment together with the
-          # publishCmd in .releaserc.js once the GALAXY_API_KEY secret exists
-          # and galaxy.yml carries a Galaxy-accepted OSI license.
-          # GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
+          GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}

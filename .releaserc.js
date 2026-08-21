@@ -33,19 +33,11 @@ module.exports = {
           "sed -i 's/^version: .*/version: ${nextRelease.version}/' galaxy.yml && ansible-galaxy collection build --force",
         // --- Ansible Galaxy publish (DISABLED until prerequisites are met) ---
         // Runs only when a release is actually cut, right after the GitHub
-        // release. To enable:
-        //   1. galaxy.yml `license` must be an OSI/SPDX license that
-        //      galaxy.ansible.com accepts (LicenseRef-Proprietary is
-        //      rejected at import).
-        //   2. Sign in to https://galaxy.ansible.com with the mcowser-p
-        //      GitHub account (claims the `mcowser_p` namespace — Galaxy
-        //      maps the dash to an underscore) and create an API token
-        //      under Collections -> API token.
-        //   3. Add the token as the GALAXY_API_KEY repository secret and
-        //      uncomment the env line in .github/workflows/release.yml.
-        //   4. Uncomment the publishCmd below.
-        // publishCmd:
-        //   "ansible-galaxy collection publish mcowser_p-linux_access-${nextRelease.version}.tar.gz --token $GALAXY_API_KEY",
+        // release. Requires the GALAXY_API_KEY repository secret (Galaxy ->
+        // Collections -> API token, signed in as mcowser-p, which owns the
+        // mcowser_p namespace) exported in .github/workflows/release.yml.
+        publishCmd:
+          "ansible-galaxy collection publish mcowser_p-linux_access-${nextRelease.version}.tar.gz --token $GALAXY_API_KEY",
       },
     ],
     [
