@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Ansible
+*.retry
+.ansible/
+# transient dirs produced by local molecule runs (ANSIBLE_HOME: ../../)
+tmp/
+roles/declarative_access/tmp/
+# built collection artifacts (ansible-galaxy collection build)
+mcowser_p-linux_access-*.tar.gz
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Molecule
+molecule/**/venv/
+
+# Node (semantic-release toolchain)
+node_modules/
+package-lock.json

@@ -1,0 +1,32 @@
+---
+# Enable systemd lingering for rootless-service owners.
+#
+# `loginctl enable-linger <user>` starts the user's systemd manager at boot
+# and keeps it running with no open session — required for rootless podman
+# quadlets (~/.config/containers/systemd/) to run unattended. The owners
+# manage those units themselves via `systemctl --user`; no sudo is involved,
+# so lingering is the ONLY grant rootless quadlets need from this role.
+#
+# Tagged `linger` so environments without systemd-logind (e.g. molecule
+# containers) can skip it via skip_tags while the rest of the role runs.
+
+- name: linger
+  tags:
+    - linger
+  block:
+    - name: linger - Validate linger users are non-empty
+      ansible.builtin.assert:
+        that:
+          - declarative_access_linger_users | select('match', '^\s*$') | list | length == 0
+        fail_msg: "Error: declarative_access_linger_users entries must be non-empty usernames or uids."
+        success_msg: "linger users look valid, proceeding."
+
+    - name: linger - Enable lingering for each user
+      ansible.builtin.command:
+        cmd: loginctl enable-linger {{ item }}
+        creates: /var/lib/systemd/linger/{{ item }}
+      loop: "{{ declarative_access_linger_users }}"
+
+  when: >-
+    declarative_access_linger | default(false) | bool
+    and declarative_access_linger_users | length > 0

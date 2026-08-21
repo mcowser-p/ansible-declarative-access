@@ -1,0 +1,452 @@
+---
+- name: Prepare
+  hosts: all
+  become: false
+  gather_facts: false
+
+  tasks:
+    # Ubuntu images ship without python; ansible needs it on the target.
+    # No-op on the EL images (python3 already present).
+    - name: Bootstrap python for ansible
+      ansible.builtin.raw: command -v python3 || (apt-get update && apt-get install -y python3)
+      changed_when: false
+
+    - name: Gather distribution facts (plays run with gather_facts false)
+      ansible.builtin.setup:
+        gather_subset:
+          - '!all'
+          - '!min'
+          - distribution
+
+    - name: Install required packages
+      ansible.builtin.package:
+        # openssh: a real sshd is run in the container so pam_group can be
+        # tested BEHAVIORALLY (ssh login -> id shows the mapped group).
+        # On EL10 this also pulls authselect, generating the full PAM tree
+        # (the base almalinux:10 image ships no /etc/pam.d files at all).
+        # Debian family: the client package is openssh-client (no 's') and
+        # the minimized ubuntu image lacks procps (pgrep).
+        name: "{{ ['sudo', 'acl', 'util-linux', 'openssh-server']
+                  + (['openssh-client', 'procps']
+                     if ansible_facts['os_family'] == 'Debian'
+                     else ['openssh-clients']) }}"
+        state: present
+
+    - name: Create test group
+      ansible.builtin.group:
+        name: test_group
+        state: present
+
+    - name: Create test user
+      ansible.builtin.user:
+        name: test_user
+        group: test_group
+        state: present
+
+    # Clean up any leftover test directories
+    - name: Remove test directories if they exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/test_file_read
+        - /tmp/test_file_modify
+        - /tmp/test_file_exec
+        - /tmp/test_folder_read
+        - /tmp/test_folder_modify
+        - /tmp/test_symlink
+        - /tmp/test_symlink_target
+        - /tmp/test_user_file_read
+        - /tmp/test_user_folder_read
+
+    ###########################################################################
+    # file_read fixtures — individual files at various depths
+    ###########################################################################
+    - name: Create file_read directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /tmp/test_file_read
+        - /tmp/test_file_read/config
+        - /tmp/test_file_read/nested/deep
+
+    - name: Create file_read test files
+      ansible.builtin.copy:
+        content: "test content"
+        dest: "{{ item }}"
+        mode: '0644'
+      loop:
+        - /tmp/test_file_read/readme.txt
+        - /tmp/test_file_read/config/app.conf
+        - /tmp/test_file_read/nested/deep/data.csv
+
+    ###########################################################################
+    # file_modify fixtures — individual files
+    ###########################################################################
+    - name: Create file_modify directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /tmp/test_file_modify
+        - /tmp/test_file_modify/data
+
+    - name: Create file_modify test files
+      ansible.builtin.copy:
+        content: "test content"
+        dest: "{{ item }}"
+        mode: '0644'
+      loop:
+        - /tmp/test_file_modify/settings.txt
+        - /tmp/test_file_modify/data/state.dat
+
+    ###########################################################################
+    # file_exec fixtures — scripts with execute bit
+    ###########################################################################
+    - name: Create file_exec directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /tmp/test_file_exec
+        - /tmp/test_file_exec/scripts
+
+    - name: Create file_exec test scripts
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "executed by $(whoami)"
+        dest: "{{ item }}"
+        mode: '0755'
+      loop:
+        - /tmp/test_file_exec/deploy.sh
+        - /tmp/test_file_exec/scripts/backup.sh
+
+    ###########################################################################
+    # folder_read fixtures — directory trees with mixed file types
+    ###########################################################################
+    - name: Create folder_read directory tree (4 levels)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /tmp/test_folder_read/level1
+        - /tmp/test_folder_read/level1/level2
+        - /tmp/test_folder_read/level1/level2/level3
+        - /tmp/test_folder_read/level1/level2/level3/level4
+
+    - name: Create folder_read regular files at each level
+      ansible.builtin.copy:
+        content: "test content"
+        dest: "{{ item }}"
+        mode: '0644'
+      loop:
+        - /tmp/test_folder_read/level1/file1.txt
+        - /tmp/test_folder_read/level1/level2/file2.txt
+        - /tmp/test_folder_read/level1/level2/level3/file3.txt
+        - /tmp/test_folder_read/level1/level2/level3/level4/file4.txt
+
+    - name: Create folder_read scripts at various levels
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "script"
+        dest: "{{ item }}"
+        mode: '0755'
+      loop:
+        - /tmp/test_folder_read/level1/script1.sh
+        - /tmp/test_folder_read/level1/level2/script2.sh
+
+    ###########################################################################
+    # folder_modify fixtures — directory trees with mixed file types
+    ###########################################################################
+    - name: Create folder_modify directory tree (4 levels)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /tmp/test_folder_modify/level1
+        - /tmp/test_folder_modify/level1/level2
+        - /tmp/test_folder_modify/level1/level2/level3
+        - /tmp/test_folder_modify/level1/level2/level3/level4
+
+    - name: Create folder_modify regular files at each level
+      ansible.builtin.copy:
+        content: "test content"
+        dest: "{{ item }}"
+        mode: '0644'
+      loop:
+        - /tmp/test_folder_modify/level1/file1.txt
+        - /tmp/test_folder_modify/level1/level2/file2.txt
+        - /tmp/test_folder_modify/level1/level2/level3/file3.txt
+        - /tmp/test_folder_modify/level1/level2/level3/level4/file4.txt
+
+    - name: Create folder_modify scripts at various levels
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo "script"
+        dest: "{{ item }}"
+        mode: '0755'
+      loop:
+        - /tmp/test_folder_modify/level1/script1.sh
+        - /tmp/test_folder_modify/level1/level2/script2.sh
+
+    ###########################################################################
+    # pam_group fixtures — local groups + PAM sshd config
+    #
+    # We can't test actual AD login (requires domain join), but we can verify
+    # the role correctly renders group.conf entries and modifies pam.d/sshd.
+    ###########################################################################
+    - name: Create local groups for pam_group testing
+      ansible.builtin.group:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - httpd
+        - nginx
+        - molecule-app     # the cairn-contract fixture's service group
+        - pamtest-group    # target group for the behavioral ssh tests
+        - sim-ad-group     # stands in for an AD group (local, no domain)
+        - tagcleanup-group # target group for the --tags cleanup CLI test
+
+    - name: Ensure /etc/pam.d directory exists
+      ansible.builtin.file:
+        path: /etc/pam.d
+        state: directory
+        mode: '0755'
+
+    - name: Create minimal sshd PAM config if not present
+      ansible.builtin.copy:
+        content: |
+          #%PAM-1.0
+          auth       substack     password-auth
+          auth       include      postlogin
+        dest: /etc/pam.d/sshd
+        mode: '0644'
+        force: false
+
+    ###########################################################################
+    # Behavioral pam_group fixtures — a REAL sshd inside the container
+    #
+    # pam_group.so grants groups in pam_sm_setcred, and sshd calls
+    # pam_setcred even for pubkey logins (UsePAM yes), so an actual ssh
+    # session proves the mapping end to end: login -> id shows the group.
+    # No AD is involved: the role is applied with ad_domain "" so the
+    # group.conf principal is a plain local user/group.
+    ###########################################################################
+    - name: Generate sshd host keys
+      ansible.builtin.command: ssh-keygen -A
+      args:
+        creates: /etc/ssh/ssh_host_ed25519_key
+
+    # Unprivileged containers lack CAP_AUDIT_CONTROL, so pam_loginuid
+    # fails pam_open_session and blocks every login. Harmless downgrade,
+    # test environment only — real hosts keep the RPM default.
+    - name: Downgrade pam_loginuid to optional (container has no audit)
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/sshd
+        regexp: '^session\s+required\s+pam_loginuid\.so'
+        line: 'session    optional     pam_loginuid.so'
+
+    # password '*' = no usable password but NOT locked; useradd's default
+    # '!!' counts as locked and makes sshd refuse even pubkey logins.
+    - name: Create ssh test users
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        password: '*'
+        groups: "{{ item.groups | default(omit) }}"
+        append: "{{ item.groups is defined }}"
+        state: present
+      loop:
+        - { name: pam_ssh_user }                            # entity-as-user test
+        - { name: pam_ssh_member, groups: sim-ad-group }    # entity-as-group test
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Ensure /root/.ssh exists
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+
+    - name: Generate root test keypair
+      ansible.builtin.command: ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519
+      args:
+        creates: /root/.ssh/id_ed25519
+
+    - name: Read root test public key
+      ansible.builtin.slurp:
+        src: /root/.ssh/id_ed25519.pub
+      register: molecule_root_pubkey
+
+    - name: Authorize root test key for ssh test users
+      ansible.posix.authorized_key:
+        user: "{{ item }}"
+        key: "{{ molecule_root_pubkey.content | b64decode }}"
+        state: present
+      loop:
+        - pam_ssh_user
+        - pam_ssh_member
+
+    - name: Start sshd (containers have no systemd to manage it)
+      ansible.builtin.shell: |
+        if ! pgrep -x sshd > /dev/null; then
+          mkdir -p /run/sshd   # Debian privilege-separation dir (no-op on EL)
+          /usr/sbin/sshd
+          echo started
+        fi
+      register: molecule_sshd_start
+      changed_when: "'started' in molecule_sshd_start.stdout"
+
+    ###########################################################################
+    # Symlink fixture — test that ACLs resolve through symlinks
+    ###########################################################################
+    - name: Create symlink target directory with test file
+      ansible.builtin.file:
+        path: /tmp/test_symlink_target
+        state: directory
+        mode: '0755'
+
+    - name: Create test file in symlink target
+      ansible.builtin.copy:
+        content: "symlink test content"
+        dest: /tmp/test_symlink_target/data.txt
+        mode: '0644'
+
+    - name: Create symlink pointing to target
+      ansible.builtin.file:
+        src: /tmp/test_symlink_target
+        dest: /tmp/test_symlink
+        state: link
+
+    ###########################################################################
+    # File ownership fixtures — test chown/chmod
+    ###########################################################################
+    - name: Create ownership test group
+      ansible.builtin.group:
+        name: ownership_group
+        state: present
+
+    - name: Create ownership test user
+      ansible.builtin.user:
+        name: ownership_user
+        group: ownership_group
+        state: present
+
+    - name: Create ownership test directory
+      ansible.builtin.file:
+        path: /tmp/test_ownership_dir/subdir
+        state: directory
+        mode: '0755'
+
+    - name: Create ownership test files
+      ansible.builtin.copy:
+        content: "ownership test content"
+        dest: "{{ item }}"
+        mode: '0644'
+      loop:
+        - /tmp/test_ownership_dir/file1.txt
+        - /tmp/test_ownership_dir/subdir/file2.txt
+        - /tmp/test_ownership_file.txt
+
+    ###########################################################################
+    # User-entity fixtures — test user: instead of group:
+    ###########################################################################
+    - name: Create user entity file_read directory and file
+      ansible.builtin.file:
+        path: /tmp/test_user_file_read
+        state: directory
+        mode: '0755'
+
+    - name: Create user entity test file
+      ansible.builtin.copy:
+        content: "user entity test content"
+        dest: /tmp/test_user_file_read/data.txt
+        mode: '0644'
+
+    - name: Create user entity folder_read directory and file
+      ansible.builtin.file:
+        path: /tmp/test_user_folder_read/subdir
+        state: directory
+        mode: '0755'
+
+    - name: Create user entity folder test file
+      ansible.builtin.copy:
+        content: "user folder content"
+        dest: /tmp/test_user_folder_read/subdir/info.txt
+        mode: '0644'
+
+    ###########################################################################
+    # Timer / quadlet / cairn-contract fixtures
+    #
+    # Fixture unit files stand in for what an application install drops on
+    # disk. The contract vars file (files/molecule-access-vars.yml) mirrors
+    # the exact shape `cairn footprint --access-vars` emits and references
+    # these paths.
+    ###########################################################################
+    - name: Create fixture systemd service unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Molecule fixture app
+
+          [Service]
+          ExecStart=/bin/true
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/molecule-app.service
+        mode: '0644'
+
+    - name: Create fixture systemd timer unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Molecule fixture maintenance timer
+
+          [Timer]
+          OnCalendar=daily
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/molecule-maintenance.timer
+        mode: '0644'
+
+    - name: Create quadlet directory
+      ansible.builtin.file:
+        path: /etc/containers/systemd
+        state: directory
+        mode: '0755'
+
+    - name: Create fixture quadlet file
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Molecule fixture web container
+
+          [Container]
+          Image=registry.example.com/web:1
+          PublishPort=8080:80
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/containers/systemd/molecule-web.container
+        mode: '0644'
+
+    - name: Create cairn-contract folder fixtures
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /tmp/molecule-app-etc
+        - /tmp/molecule-app-logs
+        - /tmp/molecule-app-state

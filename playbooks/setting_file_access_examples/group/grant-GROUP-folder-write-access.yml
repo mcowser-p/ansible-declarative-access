@@ -1,0 +1,46 @@
+---
+# Grant ACL modify (rwX) access to a folder for an AD group.
+# Defaults to the server's {hostname}-app_restricted group.
+#
+# Domain Group Naming Standard:
+#   {hostname}-app_restricted  -> default group
+#
+# SIMPLE USAGE EXAMPLE (uses default app-restricted group):
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-folder-write-access.yml \
+#   -e "write_folder=/etc/httpd/conf.d"
+#
+# USAGE WITH CUSTOM GROUP:
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-folder-write-access.yml \
+#   -e "group_name=dev-team" -e "write_folder=/etc/httpd/conf.d"
+
+- name: Grant ACL write access to specified folder
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  become: true
+  vars:
+    # Default to {hostname}-app_restricted group, or override with group_name
+    default_group: "{{ ansible_hostname | lower }}-app_restricted"
+    ad_group_name: "{{ group_name | default(default_group) }}"
+    folder_path: "{{ write_folder }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable 'write_folder' is not defined"
+      when: write_folder is not defined
+
+    - name: Configure folder write access using declarative_access role (ACL only)
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ ad_group_name }}"
+        declarative_access_folders_modify:
+          - "{{ folder_path }}"
+      tags: setfacl
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "ACL write access configured for AD group: {{ ad_group_name }}"
+          - "Write access granted to: {{ folder_path }}"
+          - "Permissions set: rwX (read + write + execute for directories)"

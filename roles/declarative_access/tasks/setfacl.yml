@@ -1,0 +1,172 @@
+# Included per target path by tasks/main.yml with:
+#   declarative_access_target_path       — the file or folder to grant on
+#   declarative_access_file_permissions  — the ACL permission string (r/rw/rx/rX/rwX)
+# The entity comes from the declarative_access_acl_user / _acl_group facts.
+---
+- name: Ensure only one ACL entity is set
+  ansible.builtin.assert:
+    that:
+      - (declarative_access_acl_user | default('') | length > 0) != (declarative_access_acl_group | default('') | length > 0)
+    fail_msg: "Error: Only declarative_access_acl_user or declarative_access_acl_group can be set."
+    success_msg: "Only one ACL entity is set, proceeding."
+
+- name: Ensure target path is set
+  ansible.builtin.assert:
+    that:
+      - declarative_access_target_path is defined
+    fail_msg: "Error: declarative_access_target_path not set."
+    success_msg: "declarative_access_target_path is set, proceeding."
+
+- name: Reset variables
+  ansible.builtin.set_fact:
+    declarative_access_acl_etype: null
+    declarative_access_acl_entity: null
+    declarative_access_acl_directories:
+      - ""
+
+- name: Print original target path
+  ansible.builtin.debug:
+    msg: "Original path: {{ declarative_access_target_path }}"
+
+- name: Gather stat information about the target path
+  ansible.builtin.stat:
+    path: "{{ declarative_access_target_path }}"
+    follow: false  # Don't follow so we can detect symlinks
+  register: declarative_access_path_info
+
+- name: Resolve symlink to actual path
+  ansible.builtin.command: readlink -f {{ declarative_access_target_path }}
+  register: declarative_access_resolved_path
+  changed_when: false
+  when: declarative_access_path_info.stat.islnk is defined and declarative_access_path_info.stat.islnk
+
+- name: Set actual path based on symlink status
+  ansible.builtin.set_fact:
+    declarative_access_actual_path: "{{ declarative_access_resolved_path.stdout if (declarative_access_path_info.stat.islnk is defined and declarative_access_path_info.stat.islnk) else declarative_access_target_path }}"
+
+- name: Re-stat the resolved path for type checks
+  ansible.builtin.stat:
+    path: "{{ declarative_access_actual_path }}"
+    follow: true
+  register: declarative_access_resolved_stat
+  when: declarative_access_path_info.stat.islnk is defined and declarative_access_path_info.stat.islnk
+
+- name: Override path info with resolved stat when symlink
+  ansible.builtin.set_fact:
+    declarative_access_path_info: "{{ declarative_access_resolved_stat }}"
+  when: declarative_access_resolved_stat is not skipped
+
+- name: Print resolved path info
+  ansible.builtin.debug:
+    msg:
+      - "Original path: {{ declarative_access_target_path }}"
+      - "Resolved path: {{ declarative_access_actual_path }}"
+      - "Is symlink: {{ declarative_access_resolved_path is defined and declarative_access_resolved_path.stdout is defined }}"
+      - "Path info: {{ declarative_access_path_info.stat }}"
+
+- name: Ensure target path is a file or directory
+  ansible.builtin.assert:
+    that:
+      - >-
+        (declarative_access_path_info.stat.isdir is defined and declarative_access_path_info.stat.isdir)
+        or (declarative_access_path_info.stat.isreg is defined and declarative_access_path_info.stat.isreg)
+    fail_msg: "Error: declarative_access_target_path not a directory or regular file."
+    success_msg: "declarative_access_target_path is set, proceeding."
+
+- name: Remove trailing / in path for a directory
+  ansible.builtin.set_fact:
+    declarative_access_path_tmp: "{{ declarative_access_actual_path | regex_replace('\\/$', '') }}"
+  when: declarative_access_path_info.stat.isdir
+
+- name: Print path_tmp
+  ansible.builtin.debug:
+    msg: "{{ declarative_access_path_tmp }}"
+  when: declarative_access_path_info.stat.isdir
+
+- name: Extract directories from path for directory
+  ansible.builtin.set_fact:
+    declarative_access_path_parts: "{{ declarative_access_path_tmp.split('/')[:-1] }}"
+  when: declarative_access_path_info.stat.isdir
+
+- name: Extract directories from path for file
+  ansible.builtin.set_fact:
+    declarative_access_path_parts: "{{ declarative_access_actual_path.split('/')[:-1] }}"
+  when: declarative_access_path_info.stat.isreg
+
+- name: Setting etype and entity based on variables set
+  ansible.builtin.set_fact:
+    declarative_access_acl_etype: "{{ 'user' if (declarative_access_acl_group | default('') | length == 0) else 'group' }}"
+    declarative_access_acl_entity: "{{ declarative_access_acl_user if (declarative_access_acl_group | default('') | length == 0) else declarative_access_acl_group }}"
+
+- name: Construct full directory paths incrementally
+  ansible.builtin.set_fact:
+    declarative_access_acl_directories: "{{ declarative_access_acl_directories | default([]) + [declarative_access_path_parts[: item + 1] | join('/')] }}"
+  when: declarative_access_path_parts[:item + 1] | join('/') != "/"
+  loop: "{{ range(declarative_access_path_parts | length) | list }}"
+
+- name: Print traversal directories
+  ansible.builtin.debug:
+    msg: "{{ declarative_access_acl_directories[2:] if declarative_access_acl_directories | length > 1 else [] }}"
+  when: declarative_access_path_info.stat.isdir
+
+- name: Ensure user can traverse into the directories (including symlink target)
+  ansible.posix.acl:
+    path: "{{ item }}"
+    entity: "{{ declarative_access_acl_entity }}"
+    etype: "{{ declarative_access_acl_etype }}"
+    permissions: "rX"
+    state: present
+    default: false
+    recursive: false
+    recalculate_mask: "mask"
+  loop: "{{ declarative_access_acl_directories[2:] if declarative_access_acl_directories | length > 1 else [] }}"
+
+###########################################################################
+# Setting Access
+###########################################################################
+- name: Set permissions for file or folder
+  block:
+    - name: Print target path for debugging
+      ansible.builtin.debug:
+        msg:
+          - "Original path: {{ declarative_access_target_path }}"
+          - "Setting ACLs on: {{ declarative_access_actual_path }}"
+
+    - name: Print final permissions for debugging
+      ansible.builtin.debug:
+        msg:
+          - "File permissions: {{ declarative_access_file_permissions }}"
+          - "Is directory: {{ declarative_access_path_info.stat.isdir }}"
+
+    # Set ACLs on top-level directory
+    - name: Configure folder ACLs
+      block:
+        - name: Set folder ACL with actual permissions
+          ansible.posix.acl:
+            path: "{{ declarative_access_actual_path }}"
+            entity: "{{ declarative_access_acl_entity }}"
+            etype: "{{ declarative_access_acl_etype }}"
+            permissions: "{{ declarative_access_file_permissions }}"
+            state: present
+            recursive: true
+            recalculate_mask: mask
+          when: declarative_access_path_info.stat.isdir
+
+        # ansible.posix.acl with recursive+default is broken
+        # see: https://github.com/ansible-collections/ansible.posix/issues/592
+        - name: Set folder default ACL
+          ansible.builtin.command:
+            cmd: "setfacl -R -d -m {{ declarative_access_acl_etype }}:{{ declarative_access_acl_entity }}:{{ declarative_access_file_permissions }} {{ declarative_access_actual_path }}"
+          register: declarative_access_setfacl_default_result
+          changed_when: declarative_access_setfacl_default_result.rc != 0
+          when: declarative_access_path_info.stat.isdir
+
+    - name: Configure single file ACL
+      ansible.posix.acl:
+        path: "{{ declarative_access_actual_path }}"
+        entity: "{{ declarative_access_acl_entity }}"
+        etype: "{{ declarative_access_acl_etype }}"
+        permissions: "{{ declarative_access_file_permissions }}"
+        state: present
+        recalculate_mask: mask
+      when: declarative_access_path_info.stat.isreg

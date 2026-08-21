@@ -1,0 +1,241 @@
+---
+# Ansible playbook to create a restricted service user and group for an application
+# Creates group "app-restricted" and user "svc.app" with no home directory and nologin shell
+# User is added to the group
+# Creates /app folder (root owned) and /app/<app_name> folder with ownership by the user/group
+# Sets up ACL permissions and creates a systemd service file
+#
+# Usage:
+#   ansible-playbook playbooks/3_setup_self_systemd_service.yml -e "app_name=myapp"
+#   ansible-playbook playbooks/3_setup_self_systemd_service.yml -e "app_name=myapp" -e "app_user=custom.user" -e "app_group=custom.group"
+#
+# Required variables:
+#   app_name        - Name of the application (used for folder and service name)
+#
+# Optional variables:
+#   app_user        - Service user name (default: svc.<app_name>)
+#   app_group       - Service group name (default: <app_name>-restricted)
+#   folder_path     - Full path to app folder (default: /app/<app_name>)
+#   cleanup         - Set to true to remove created resources (default: false)
+#   timer           - Set to true to also create a systemd timer (default: false)
+#   timer_schedule  - Timer schedule (default: "*-*-* *:*:00" - every minute)
+
+- name: Create service user, group, and folder with permissions
+  hosts: all
+  become: true
+  pre_tasks:
+    - name: Validate app_name is provided
+      ansible.builtin.assert:
+        that:
+          - app_name is defined
+          - app_name | length > 0
+        fail_msg: "Error: 'app_name' is required. Pass it with -e \"app_name=myapp\""
+        success_msg: "app_name is set: {{ app_name }}"
+
+  vars:
+    # Service user and group names
+    service_user_name: "{{ app_user | default('svc.' + app_name) }}"
+    service_group_name: "{{ app_group | default(app_name + '-restricted') }}"
+
+    # Folder paths
+    base_app_folder: /data
+    app_folder: "{{ folder_path | default(base_app_folder + '/' + app_name) }}"
+
+    # Systemd service name
+    systemd_service_name: "{{ app_name }}.service"
+    systemd_service_path: "/etc/systemd/system/{{ systemd_service_name }}"
+
+    # Cleanup mode
+    cleanup_mode: "{{ cleanup | default(false) }}"
+
+    # Timer mode
+    timer_enabled: "{{ timer | default(false) }}"
+    timer_schedule: "{{ timer_schedule | default('*-*-* *:*:00') }}"
+    systemd_timer_name: "{{ app_name }}.timer"
+    systemd_timer_path: "/etc/systemd/system/{{ systemd_timer_name }}"
+
+  tasks:
+    # ============================================
+    # CLEANUP TASKS (when cleanup=true)
+    # ============================================
+    - name: Stop and disable systemd service
+      ansible.builtin.systemd:
+        name: "{{ systemd_service_name }}"
+        state: stopped
+        enabled: false
+      when: cleanup_mode | bool
+
+    - name: Remove systemd service file
+      ansible.builtin.file:
+        path: "{{ systemd_service_path }}"
+        state: absent
+      when: cleanup_mode | bool
+
+    - name: Stop and disable systemd timer
+      ansible.builtin.systemd:
+        name: "{{ systemd_timer_name }}"
+        state: stopped
+        enabled: false
+      when: cleanup_mode | bool and timer_enabled | bool
+
+    - name: Remove systemd timer file
+      ansible.builtin.file:
+        path: "{{ systemd_timer_path }}"
+        state: absent
+      when: cleanup_mode | bool and timer_enabled | bool
+
+    - name: Remove application folder
+      ansible.builtin.file:
+        path: "{{ app_folder }}"
+        state: absent
+      when: cleanup_mode | bool
+
+    - name: Remove service user
+      ansible.builtin.user:
+        name: "{{ service_user_name }}"
+        state: absent
+        remove: true
+      when: cleanup_mode | bool
+
+    - name: Remove service group
+      ansible.builtin.group:
+        name: "{{ service_group_name }}"
+        state: absent
+      when: cleanup_mode | bool
+
+    - name: Display cleanup summary
+      ansible.builtin.debug:
+        msg:
+          - "Cleanup completed for: {{ app_name }}"
+          - "Removed user: {{ service_user_name }}"
+          - "Removed group: {{ service_group_name }}"
+          - "Removed folder: {{ app_folder }}"
+          - "Removed service: {{ systemd_service_path }}"
+      when: cleanup_mode | bool
+
+    - name: Exit playbook after cleanup
+      ansible.builtin.meta: end_play
+      when: cleanup_mode | bool
+
+    # ============================================
+    # CREATE TASKS (when cleanup=false)
+    # ============================================
+    - name: Create base /app folder with root ownership
+      ansible.builtin.file:
+        path: "{{ base_app_folder }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create group {{ service_group_name }}
+      ansible.builtin.group:
+        name: "{{ service_group_name }}"
+        state: present
+
+    - name: Create user {{ service_user_name }}
+      ansible.builtin.user:
+        name: "{{ service_user_name }}"
+        group: "{{ service_group_name }}"
+        shell: /sbin/nologin
+        create_home: false
+        state: present
+
+    - name: Create application folder {{ app_folder }} with ownership and setgid
+      ansible.builtin.file:
+        path: "{{ app_folder }}"
+        state: directory
+        owner: "{{ service_user_name }}"
+        group: "{{ service_group_name }}"
+        mode: '2750'
+        # mode 2750 = rwxr-s--- (setgid bit set, so new files inherit group)
+
+    - name: Set ACL on the application folder for the group
+      ansible.posix.acl:
+        path: "{{ app_folder }}"
+        entity: "{{ service_group_name }}"
+        etype: group
+        permissions: rwx
+        state: present
+        recursive: true
+        recalculate_mask: mask
+
+    - name: Set default ACL on the application folder for the group
+      ansible.posix.acl:
+        path: "{{ app_folder }}"
+        entity: "{{ service_group_name }}"
+        etype: group
+        permissions: rwx
+        state: present
+        default: true
+        recursive: true
+        recalculate_mask: mask
+
+    - name: Create systemd service file
+      ansible.builtin.copy:
+        dest: "{{ systemd_service_path }}"
+        content: |
+          [Unit]
+          Description={{ app_name }} Application Service
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ service_user_name }}
+          Group={{ service_group_name }}
+          ExecStart=/bin/true
+          Restart=on-failure
+          WorkingDirectory={{ app_folder }}
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: "{{ service_group_name }}"
+        mode: '0660'
+      notify: Reload systemd daemon
+
+    - name: Create systemd timer file
+      ansible.builtin.copy:
+        dest: "{{ systemd_timer_path }}"
+        content: |
+          [Unit]
+          Description={{ app_name }} Application Timer
+          Requires={{ systemd_service_name }}
+
+          [Timer]
+          OnCalendar={{ timer_schedule }}
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        owner: root
+        group: "{{ service_group_name }}"
+        mode: '0660'
+      when: timer_enabled | bool
+      notify: Reload systemd daemon
+
+    - name: Enable and start systemd timer
+      ansible.builtin.systemd:
+        name: "{{ systemd_timer_name }}"
+        enabled: true
+        state: started
+      when: timer_enabled | bool
+
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "Application name: {{ app_name }}"
+          - "Service user created: {{ service_user_name }}"
+          - "Service group created: {{ service_group_name }}"
+          - "Base folder: {{ base_app_folder }} (root:root, 755)"
+          - "App folder created: {{ app_folder }}"
+          - "App folder owner: {{ service_user_name }}:{{ service_group_name }}"
+          - "App folder permissions: rwxr-s--- (2750) with setgid for group inheritance"
+          - "Systemd service created: {{ systemd_service_path }}"
+          - "Service owner: root:{{ service_group_name }} (660)"
+          - "Systemd timer created: {{ systemd_timer_path }} (enabled: {{ timer_enabled }})"
+
+  handlers:
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true

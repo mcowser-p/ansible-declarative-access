@@ -1,0 +1,180 @@
+---
+# Build ONE sudoers file per entity containing every grant for this profile:
+# systemctl/journalctl on the declared services, timers, and quadlet-generated
+# services, plus any raw commands. Keeping it to a single file per
+# (profile, entity) is what lets sudo_cleanup.yml remove everything at once.
+
+- name: sudo
+  block:
+
+    - name: Checking syntax - services use bare names
+      ansible.builtin.fail:
+        msg: "Error: Service names must not include the '.service' suffix. Use bare names (e.g., 'httpd' not 'httpd.service')."
+      when: declarative_access_services | select('search', '\.service$') | list | length > 0
+
+    - name: Checking syntax - timers use bare names
+      ansible.builtin.fail:
+        msg: "Error: Timer names must not include the '.timer' suffix. Use bare names (e.g., 'nightly' not 'nightly.timer')."
+      when: declarative_access_timers | select('search', '\.timer$') | list | length > 0
+
+    - name: Checking syntax - quadlets use generated-service base names
+      ansible.builtin.fail:
+        msg: >-
+          Error: Quadlet entries must be the generated-service base name with no
+          suffix (foo.container -> 'foo', foo.pod -> 'foo-pod', ...).
+      when: >-
+        declarative_access_quadlets
+        | select('search', '\.(service|container|pod|network|volume|kube|image|build)$')
+        | list | length > 0
+
+    - name: Create an empty list for the sudoers command grants
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: []
+
+    - name: Debug unit lists
+      ansible.builtin.debug:
+        msg:
+          - "services: {{ declarative_access_services }}"
+          - "timers: {{ declarative_access_timers }}"
+          - "quadlets: {{ declarative_access_quadlets }}"
+      when: declarative_access_debug | bool
+
+    ###########################################################################
+    # Services — full action set, both bare and .service forms (sudo matches
+    # the literal command line typed, so both spellings must be granted).
+    ###########################################################################
+    - name: Format services into sudoers commands
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: "{{ declarative_access_sudoers_commands + ['/bin/systemctl ' + item.1 + ' ' + item.0] + ['/bin/systemctl ' + item.1 + ' ' + item.0 + '.service'] }}"
+      loop: "{{ declarative_access_services | product(declarative_access_systemctl_actions) | list }}"
+      when: declarative_access_services | length > 0
+
+    - name: Add journalctl commands for services
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: >-
+          {{ declarative_access_sudoers_commands
+             + [ '/bin/journalctl -u ' + item,
+                 '/bin/journalctl -e -u ' + item,
+                 '/bin/journalctl -ef -u ' + item,
+                 '/bin/journalctl -u ' + item + '.service',
+                 '/bin/journalctl -e -u ' + item + '.service',
+                 '/bin/journalctl -ef -u ' + item + '.service',
+                 '/bin/journalctl --since -5m -u ' + item,
+                 '/bin/journalctl --since -10m -u ' + item,
+                 '/bin/journalctl --since -15m -u ' + item,
+                 '/bin/journalctl --since -5m -u ' + item + '.service',
+                 '/bin/journalctl --since -10m -u ' + item + '.service',
+                 '/bin/journalctl --since -15m -u ' + item + '.service' ]
+          }}
+      loop: "{{ declarative_access_services }}"
+      when: declarative_access_services | length > 0
+
+    ###########################################################################
+    # Timers — explicit <name>.timer form ONLY: systemctl resolves a bare
+    # name to <name>.service, so a bare grant would target the wrong unit.
+    ###########################################################################
+    - name: Format timers into sudoers commands
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: "{{ declarative_access_sudoers_commands + ['/bin/systemctl ' + item.1 + ' ' + item.0 + '.timer'] }}"
+      loop: "{{ declarative_access_timers | product(declarative_access_timer_actions) | list }}"
+      when: declarative_access_timers | length > 0
+
+    - name: Add journalctl commands for timers
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: >-
+          {{ declarative_access_sudoers_commands
+             + [ '/bin/journalctl -u ' + item + '.timer',
+                 '/bin/journalctl -e -u ' + item + '.timer',
+                 '/bin/journalctl -ef -u ' + item + '.timer',
+                 '/bin/journalctl --since -5m -u ' + item + '.timer',
+                 '/bin/journalctl --since -10m -u ' + item + '.timer',
+                 '/bin/journalctl --since -15m -u ' + item + '.timer' ]
+          }}
+      loop: "{{ declarative_access_timers }}"
+      when: declarative_access_timers | length > 0
+
+    ###########################################################################
+    # Quadlets — the entries are GENERATED-service base names, so grants look
+    # exactly like service grants but with the restricted lifecycle-only
+    # action set (generator units cannot be enabled/disabled/masked).
+    ###########################################################################
+    - name: Format quadlets into sudoers commands
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: "{{ declarative_access_sudoers_commands + ['/bin/systemctl ' + item.1 + ' ' + item.0] + ['/bin/systemctl ' + item.1 + ' ' + item.0 + '.service'] }}"
+      loop: "{{ declarative_access_quadlets | product(declarative_access_quadlet_actions) | list }}"
+      when: declarative_access_quadlets | length > 0
+
+    - name: Add journalctl commands for quadlets
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: >-
+          {{ declarative_access_sudoers_commands
+             + [ '/bin/journalctl -u ' + item,
+                 '/bin/journalctl -e -u ' + item,
+                 '/bin/journalctl -ef -u ' + item,
+                 '/bin/journalctl -u ' + item + '.service',
+                 '/bin/journalctl -e -u ' + item + '.service',
+                 '/bin/journalctl -ef -u ' + item + '.service',
+                 '/bin/journalctl --since -5m -u ' + item,
+                 '/bin/journalctl --since -10m -u ' + item,
+                 '/bin/journalctl --since -15m -u ' + item,
+                 '/bin/journalctl --since -5m -u ' + item + '.service',
+                 '/bin/journalctl --since -10m -u ' + item + '.service',
+                 '/bin/journalctl --since -15m -u ' + item + '.service' ]
+          }}
+      loop: "{{ declarative_access_quadlets }}"
+      when: declarative_access_quadlets | length > 0
+
+    # Editing a unit or quadlet file only takes effect after daemon-reload,
+    # so any unit grant implies it. Note it is system-global, not per-unit.
+    - name: Add systemctl daemon-reload command
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: "{{ declarative_access_sudoers_commands + ['/bin/systemctl daemon-reload'] }}"
+      when: >-
+        declarative_access_services | length > 0
+        or declarative_access_timers | length > 0
+        or declarative_access_quadlets | length > 0
+
+    - name: Debug commands
+      ansible.builtin.debug:
+        var: declarative_access_commands
+      when: declarative_access_debug | bool
+
+    - name: Append any commands
+      ansible.builtin.set_fact:
+        declarative_access_sudoers_commands: "{{ declarative_access_sudoers_commands + [item] }}"
+      loop: "{{ declarative_access_commands }}"
+      when: declarative_access_commands | length > 0
+
+    - name: Debug sudoers commands
+      ansible.builtin.debug:
+        var: declarative_access_sudoers_commands
+      when: declarative_access_debug | bool
+
+    - name: Sudoers - Allowing User Access
+      community.general.sudoers:
+        name: "{{ ((declarative_access_profile_name + '-') if declarative_access_profile_name is defined else '') + (item | regex_replace('\\.', '-') | lower) }}"
+        user: "{{ item | lower }}"
+        commands: "{{ declarative_access_sudoers_commands }}"
+        nopassword: "{{ declarative_access_sudo_nopasswd }}"
+        runas: "{{ declarative_access_sudo_runas }}"
+        state: "{{ declarative_access_sudoers_state }}"
+        sudoers_path: "{{ declarative_access_sudoers_path }}"
+      loop: "{{ declarative_access_user if declarative_access_user is iterable and declarative_access_user is not string else [declarative_access_user] }}"
+      when:
+        - declarative_access_user | default('') | length > 0
+        - declarative_access_sudoers_commands | length > 0
+
+    - name: Sudoers - Allow Group Access
+      community.general.sudoers:
+        name: "{{ ((declarative_access_profile_name + '-') if declarative_access_profile_name is defined else '') + (declarative_access_group | regex_replace('\\.', '-') | lower) }}"
+        group: "{{ declarative_access_group | lower }}"
+        commands: "{{ declarative_access_sudoers_commands }}"
+        nopassword: "{{ declarative_access_sudo_nopasswd }}"
+        runas: "{{ declarative_access_sudo_runas }}"
+        state: "{{ declarative_access_sudoers_state }}"
+        sudoers_path: "{{ declarative_access_sudoers_path }}"
+      when:
+        - declarative_access_group | default('') | length > 0
+        - declarative_access_sudoers_commands | length > 0
+
+  when: declarative_access_sudo | default(false) | bool

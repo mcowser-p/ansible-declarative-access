@@ -1,0 +1,36 @@
+---
+# SIMPLE USAGE EXAMPLE:
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/user/grant-USER-folder-write-access.yml -e "user_name=jdoe" -e "write_folder=/etc/httpd/conf.d"
+
+- name: Grant ACL write access to specified folder for user
+  hosts: "{{ target_hosts | default('all') }}"
+  become: true
+  vars:
+    # Required variables - set these when running the playbook
+    ad_user_name: "{{ user_name }}"
+    folder_path: "{{ write_folder }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable '{{ item }}' is not defined"
+      when: vars[item] is not defined
+      loop:
+        - user_name
+        - write_folder
+
+    - name: Configure folder write access using declarative_access role (ACL only)
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: "{{ ad_user_name }}"
+        declarative_access_folders_modify:
+          - "{{ folder_path }}"
+      tags: setfacl
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "ACL write access configured for AD user: {{ ad_user_name }}"
+          - "Write access granted to: {{ folder_path }}"
+          - "Permissions set: rwX (read + write + execute for directories)"

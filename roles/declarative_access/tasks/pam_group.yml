@@ -1,0 +1,140 @@
+---
+# Configure PAM group.conf for temporary local group membership
+#
+# Maps a group/user to local groups via pam_group.so so that when
+# members log in via SSH they are temporarily added to the specified
+# local groups for the duration of their session.
+#
+# Required variables:
+#   - declarative_access_group or declarative_access_user: the entity to map
+#   - declarative_access_local_groups: list of local group names to add membership to
+#
+# Optional variables:
+#   - declarative_access_ad_domain: AD domain suffix (default: example.com).
+#     Set to "" to map a LOCAL (non-AD) user or group — the group.conf
+#     principal is then written without an @domain suffix.
+#   - declarative_access_group_conf_file: path to group.conf (default: /etc/security/group.conf)
+#   - declarative_access_pam_sshd_file: path to PAM sshd config (default: /etc/pam.d/sshd)
+
+- name: pam_group
+  block:
+    - name: pam_group - Validate local groups are provided
+      ansible.builtin.assert:
+        that:
+          - declarative_access_local_groups is defined
+          - declarative_access_local_groups | length > 0
+        fail_msg: "Error: 'declarative_access_local_groups' must be defined and non-empty when pam_group is enabled."
+        success_msg: "declarative_access_local_groups is set, proceeding."
+
+    - name: pam_group - Set entity for group.conf entry
+      ansible.builtin.set_fact:
+        declarative_access_pam_entity: "{{ '%' + declarative_access_group if declarative_access_group | default('') | length > 0 else (declarative_access_user | default('')) }}"
+
+    - name: pam_group - Validate entity is set
+      ansible.builtin.assert:
+        that:
+          - declarative_access_pam_entity | length > 0
+        fail_msg: "Error: Either 'declarative_access_group' or 'declarative_access_user' must be set when pam_group is enabled."
+        success_msg: "Entity is set: {{ declarative_access_pam_entity }}"
+
+    # An empty ad_domain means a local principal — no @domain suffix.
+    - name: pam_group - Set principal for group.conf entry
+      ansible.builtin.set_fact:
+        declarative_access_pam_principal: "{{ declarative_access_pam_entity + ('@' + declarative_access_ad_domain if declarative_access_ad_domain | length > 0 else '') }}"
+
+    - name: pam_group - Ensure /etc/security directory exists
+      ansible.builtin.file:
+        path: /etc/security
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: pam_group - Ensure group.conf exists
+      ansible.builtin.file:
+        path: "{{ declarative_access_group_conf_file }}"
+        state: touch
+        mode: '0644'
+        owner: root
+        group: root
+        modification_time: preserve
+        access_time: preserve
+
+    - name: pam_group - Add header comment to group.conf if missing
+      ansible.builtin.lineinfile:
+        path: "{{ declarative_access_group_conf_file }}"
+        line: "# /etc/security/group.conf - PAM group membership configuration"
+        insertbefore: BOF
+        create: true
+
+    - name: pam_group - Add format comment to group.conf if missing
+      ansible.builtin.lineinfile:
+        path: "{{ declarative_access_group_conf_file }}"
+        line: "# Format: services;ttys;users;times;groups"
+        insertafter: "^# /etc/security/group.conf"
+        create: true
+
+    - name: pam_group - Verify local groups exist
+      ansible.builtin.getent:
+        database: group
+        key: "{{ item }}"
+        fail_key: false
+      loop: "{{ declarative_access_local_groups }}"
+      register: declarative_access_pam_local_group_check
+
+    - name: pam_group - Fail if any local group does not exist
+      ansible.builtin.fail:
+        msg: |
+          ERROR: Local group '{{ item.item }}' does not exist!
+
+          The PAM group configuration requires the local group to exist before
+          mapping AD users/groups to it.
+
+          Please create the group first using one of these methods:
+            1. Install the package that creates the group (e.g., dnf install httpd)
+            2. Create manually: groupadd {{ item.item }}
+
+          After creating the group, re-run this playbook.
+      loop: "{{ declarative_access_pam_local_group_check.results }}"
+      when: item.ansible_facts.getent_group is not defined or item.ansible_facts.getent_group[item.item] is none
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: pam_group - Add group membership entries to group.conf
+      ansible.builtin.lineinfile:
+        path: "{{ declarative_access_group_conf_file }}"
+        line: "sshd;!tty*;{{ declarative_access_pam_principal }};Al0000-2400;{{ item }}"
+        # Field-anchored so principal 'dev' never matches 'dev2''s line.
+        regexp: "^[^;]*;[^;]*;{{ declarative_access_pam_principal | regex_escape }};[^;]*;{{ item | regex_escape }}$"
+        state: present
+        backup: true
+        create: true
+      loop: "{{ declarative_access_local_groups }}"
+
+    - name: pam_group - Check if pam_group.so is already in sshd PAM config
+      ansible.builtin.shell: |
+        grep -E "^auth.*pam_group\.so" {{ declarative_access_pam_sshd_file }} || true
+      register: declarative_access_pam_group_so_check
+      changed_when: false
+
+    - name: pam_group - Add pam_group.so to sshd PAM configuration
+      ansible.builtin.lineinfile:
+        path: "{{ declarative_access_pam_sshd_file }}"
+        line: "auth       required     pam_group.so"
+        insertafter: "^auth"
+        state: present
+        backup: true
+      when: declarative_access_pam_group_so_check.stdout | length == 0
+      notify: Restart sshd
+
+    - name: pam_group - Display configuration result
+      ansible.builtin.debug:
+        msg:
+          - "PAM group configuration completed:"
+          - "  Principal: {{ declarative_access_pam_principal }}"
+          - "  Local Groups: {{ declarative_access_local_groups | join(', ') }}"
+          - "  Config File: {{ declarative_access_group_conf_file }}"
+          - "  Group membership is temporary (active only during SSH sessions)"
+      when: declarative_access_debug | default(false) | bool
+
+  when: declarative_access_pam_group | default(false) | bool

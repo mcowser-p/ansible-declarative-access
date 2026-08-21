@@ -1,0 +1,34 @@
+---
+driver:
+  name: docker
+platforms:
+  - name: alma9
+    image: almalinux:9
+    pre_build_image: true
+  - name: alma10
+    image: almalinux:10
+    pre_build_image: true
+  - name: ubuntu2404
+    image: ubuntu:24.04
+    pre_build_image: true
+
+role_name_check: 1
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_HOME: ../../
+    ANSIBLE_ROLES_PATH: ../../../../roles
+    ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections:../../../../collections
+    ANSIBLE_REMOTE_TMP:
+  config_options:
+    defaults:
+      # login needs realmd (AD join) and linger needs systemd-logind —
+      # neither exists in these containers, so both are content-tested only.
+      # NOTE: this alone is not sufficient (molecule passes its own
+      # --skip-tags on the CLI); converge additionally keeps login/linger
+      # toggled off in every invocation.
+      skip_tags: login,linger

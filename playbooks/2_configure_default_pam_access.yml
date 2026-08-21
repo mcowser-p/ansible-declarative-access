@@ -1,0 +1,339 @@
+---
+# Configure PAM group.conf for default admin-level access
+#
+# This playbook configures /etc/security/group.conf to map AD admin groups
+# to the local wheel group, providing sudo/admin access to authorized users.
+#
+# Domain Group Naming Standard:
+#   - {hostname}-app_full           -> mapped to wheel group + SSH access
+#   - {hostname}-admin_full         -> mapped to wheel group + SSH access
+#   - {hostname}-app_restricted     -> SSH access only (no wheel group)
+#
+# SIMPLE USAGE (uses inventory hostname):
+# ansible-playbook -i inventory playbooks/2_configure_default_pam_access.yml
+#
+# USAGE WITH CUSTOM HOSTNAME:
+# ansible-playbook -i inventory playbooks/2_configure_default_pam_access.yml \
+#   -e "server_hostname=myserver"
+#
+# USAGE WITH CLEANUP:
+# ansible-playbook -i inventory playbooks/2_configure_default_pam_access.yml \
+#   -e "cleanup=true"
+#
+# USAGE WITH SPECIFIC HOSTS:
+# ansible-playbook -i inventory playbooks/2_configure_default_pam_access.yml \
+#   -e "target_hosts=webservers"
+
+- name: Configure PAM for admin-level access via wheel group
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  become: true
+
+  vars:
+    # PAM group.conf file location
+    group_conf_file: "/etc/security/group.conf"
+
+    # PAM configuration file to enable pam_group.so
+    pam_sshd_file: "/etc/pam.d/sshd"
+
+    # Local group for admin access
+    admin_local_group: "wheel"
+
+    # AD domain suffix
+    ad_domain: "example.com"
+
+  tasks:
+    - name: Set default variables
+      ansible.builtin.set_fact:
+        _server_hostname: "{{ server_hostname | default(ansible_hostname) | lower }}"
+        _cleanup: "{{ cleanup | default(false) | bool }}"
+
+    - name: Set AD group names based on hostname
+      ansible.builtin.set_fact:
+        app_full_group: "{{ _server_hostname }}-app_full"
+        admin_full_group: "{{ _server_hostname }}-admin_full"
+        app_restricted_group: "{{ _server_hostname }}-app_restricted"
+
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "PAM Admin Access Configuration"
+          - "=========================================="
+          - "Hostname: {{ _server_hostname }}"
+          - "Local Admin Group: {{ admin_local_group }}"
+          - "AD Groups with wheel access:"
+          - "  - {{ app_full_group }}@{{ ad_domain }}"
+          - "  - {{ admin_full_group }}@{{ ad_domain }}"
+          - "AD Groups with SSH access only:"
+          - "  - {{ app_restricted_group }}@{{ ad_domain }}"
+          - "Cleanup Mode: {{ _cleanup }}"
+          - "=========================================="
+
+    ###########################################################################
+    # Cleanup Mode
+    ###########################################################################
+    - name: Remove PAM admin group configurations
+      when: _cleanup
+      block:
+        - name: Withdraw SSH login access for app-full group
+          ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --withdraw --verbose --groups {{ app_full_group }}"
+          changed_when: false
+          ignore_errors: true
+
+        - name: Withdraw SSH login access for admin-full group
+          ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --withdraw --verbose --groups {{ admin_full_group }}"
+          changed_when: false
+          ignore_errors: true
+
+        - name: Withdraw SSH login access for app-restricted group
+          ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --withdraw --verbose --groups {{ app_restricted_group }}"
+          changed_when: false
+          ignore_errors: true
+
+        - name: Remove app-full group entry from group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            regexp: "^[^;]*;[^;]*;%{{ app_full_group | regex_escape }}@{{ ad_domain | regex_escape }};[^;]*;{{ admin_local_group | regex_escape }}$"
+            state: absent
+            backup: true
+
+        - name: Remove admin-full group entry from group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            regexp: "^[^;]*;[^;]*;%{{ admin_full_group | regex_escape }}@{{ ad_domain | regex_escape }};[^;]*;{{ admin_local_group | regex_escape }}$"
+            state: absent
+            backup: true
+
+        - name: Display cleanup summary
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "Cleanup Completed"
+              - "=========================================="
+              - "Removed SSH login access for:"
+              - "  - {{ app_full_group }}"
+              - "  - {{ admin_full_group }}"
+              - "  - {{ app_restricted_group }}"
+              - ""
+              - "Removed PAM wheel group mappings for:"
+              - "  - %{{ app_full_group }}@{{ ad_domain }}"
+              - "  - %{{ admin_full_group }}@{{ ad_domain }}"
+              - ""
+              - "From local group: {{ admin_local_group }}"
+              - "Configuration file backed up"
+              - "Users will need to log out and back in for changes to take effect"
+              - "=========================================="
+
+    ###########################################################################
+    # Configuration Mode
+    ###########################################################################
+    - name: Configure PAM admin group membership
+      when: not _cleanup
+      block:
+        - name: Ensure /etc/security directory exists
+          ansible.builtin.file:
+            path: /etc/security
+            state: directory
+            mode: '0755'
+            owner: root
+            group: root
+
+        - name: Ensure group.conf exists
+          ansible.builtin.file:
+            path: "{{ group_conf_file }}"
+            state: touch
+            mode: '0644'
+            owner: root
+            group: root
+            modification_time: preserve
+            access_time: preserve
+
+        - name: Add header comment to group.conf if empty
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            line: "# /etc/security/group.conf - PAM group membership configuration"
+            insertbefore: BOF
+            create: true
+
+        - name: Add format comment to group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            line: "# Format: services;ttys;users;times;groups"
+            insertafter: "^# /etc/security/group.conf"
+            create: true
+
+        - name: Verify wheel group exists
+          ansible.builtin.getent:
+            database: group
+            key: "{{ admin_local_group }}"
+            fail_key: false
+          register: wheel_group_check
+
+        - name: Fail if wheel group does not exist
+          ansible.builtin.fail:
+            msg: |
+              ERROR: Local group '{{ admin_local_group }}' does not exist!
+
+              The wheel group is required for admin access and should exist on all RHEL/AlmaLinux systems.
+
+              Please create the group first:
+                sudo groupadd {{ admin_local_group }}
+
+              After creating the group, re-run this playbook.
+          when: wheel_group_check.ansible_facts.getent_group is not defined or wheel_group_check.ansible_facts.getent_group[admin_local_group] is none
+
+        - name: Check if AD groups exist
+          ansible.builtin.getent:
+            database: group
+            key: "{{ item }}@{{ ad_domain }}"
+            fail_key: false
+          loop:
+            - "{{ app_full_group }}"
+            - "{{ admin_full_group }}"
+            - "{{ app_restricted_group }}"
+          register: ad_groups_check
+
+        - name: Fail if any AD groups do not exist
+          ansible.builtin.fail:
+            msg: |
+              ERROR: AD group '{{ item.item }}@{{ ad_domain }}' does not exist!
+
+              The AD group must exist in Active Directory before configuring PAM access.
+
+              Expected AD groups:
+                - {{ app_full_group }}@{{ ad_domain }}
+                - {{ admin_full_group }}@{{ ad_domain }}
+                - {{ app_restricted_group }}@{{ ad_domain }}
+
+              Please ensure all required groups exist in Active Directory first.
+              You can create these groups using the playbooks/create_ad_groups.yml playbook.
+
+              After creating the groups in AD, re-run this playbook.
+          loop: "{{ ad_groups_check.results }}"
+          when: item.ansible_facts.getent_group is not defined or item.ansible_facts.getent_group[item.item + '@' + ad_domain] is none
+          loop_control:
+            label: "{{ item.item }}@{{ ad_domain }}"
+
+        - name: Display AD groups verification success
+          ansible.builtin.debug:
+            msg:
+              - "✓ Verified all required AD groups exist:"
+              - "  - {{ app_full_group }}@{{ ad_domain }}"
+              - "  - {{ admin_full_group }}@{{ ad_domain }}"
+              - "  - {{ app_restricted_group }}@{{ ad_domain }}"
+
+        - name: Add app-full group mapping to group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            line: "sshd;!tty*;%{{ app_full_group }}@{{ ad_domain }};Al0000-2400;{{ admin_local_group }}"
+            regexp: "^[^;]*;[^;]*;%{{ app_full_group | regex_escape }}@{{ ad_domain | regex_escape }};[^;]*;{{ admin_local_group | regex_escape }}$"
+            state: present
+            backup: true
+            create: true
+
+        - name: Add admin-full group mapping to group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            line: "*;*;%{{ admin_full_group }}@{{ ad_domain }};Al0000-2400;{{ admin_local_group }}"
+            regexp: "^[^;]*;[^;]*;%{{ admin_full_group | regex_escape }}@{{ ad_domain | regex_escape }};[^;]*;{{ admin_local_group | regex_escape }}$"
+            state: present
+            backup: true
+            create: true
+
+        - name: Check if pam_group.so is already in sshd PAM config
+          ansible.builtin.shell: |
+            grep -E "^auth.*pam_group\.so" {{ pam_sshd_file }} || true
+          register: pam_group_check
+          changed_when: false
+
+        - name: Add pam_group.so to sshd PAM configuration
+          ansible.builtin.lineinfile:
+            path: "{{ pam_sshd_file }}"
+            line: "auth       required     pam_group.so"
+            insertafter: "^auth"
+            state: present
+            backup: true
+          when: pam_group_check.stdout | length == 0
+          notify: Restart sshd
+
+        - name: Allow SSH login access for app-full group
+          ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --verbose --groups {{ app_full_group }}"
+          changed_when: false
+
+        - name: Allow SSH login access for admin-full group
+          ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --verbose --groups {{ admin_full_group }}"
+          changed_when: false
+
+        - name: Allow SSH login access for app-restricted group
+          ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --verbose --groups {{ app_restricted_group }}"
+          changed_when: false
+
+        - name: Wait for realm permit changes to propagate
+          ansible.builtin.pause:
+            seconds: 5
+
+        - name: Verify group.conf configuration
+          ansible.builtin.command: "cat {{ group_conf_file }}"
+          register: group_conf_content
+          changed_when: false
+
+        - name: Display group.conf contents
+          ansible.builtin.debug:
+            msg: "{{ group_conf_content.stdout_lines }}"
+
+        - name: Verify SSH allowed groups configuration
+          ansible.builtin.shell: "grep 'simple_allow_groups' /etc/sssd/sssd.conf || echo 'Not found in sssd.conf'"
+          register: sssd_allow_groups
+          changed_when: false
+
+        - name: Display SSH allowed groups
+          ansible.builtin.debug:
+            msg: "{{ sssd_allow_groups.stdout_lines }}"
+
+        - name: Display configuration result
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "PAM Admin Access Configuration Completed!"
+              - "=========================================="
+              - ""
+              - "Configuration Details:"
+              - "  Hostname: {{ _server_hostname }}"
+              - "  Local Admin Group: {{ admin_local_group }}"
+              - ""
+              - "AD Groups with Wheel Group Mapping (Full Admin Access):"
+              - "  1. %{{ app_full_group }}@{{ ad_domain }} -> {{ admin_local_group }}"
+              - "  2. %{{ admin_full_group }}@{{ ad_domain }} -> {{ admin_local_group }}"
+              - ""
+              - "AD Groups with SSH Access Only (No Sudo):"
+              - "  3. {{ app_restricted_group }}@{{ ad_domain }}"
+              - ""
+              - "Access Configuration:"
+              - "  app-full mapping:   sshd only, !tty* (remote SSH sessions)"
+              - "  admin-full mapping: all services and TTYs (*;*)"
+              - "  Active Times: Always (Al0000-2400)"
+              - ""
+              - "IMPORTANT NOTES:"
+              - "  ✓ SSH login access granted to all 3 AD groups via realm permit"
+              - "  ✓ app-full and admin-full groups have temporary wheel group membership"
+              - "  ✓ Wheel group membership provides sudo/admin access"
+              - "  ✓ app-restricted group has SSH access only (no sudo)"
+              - "  ✓ Group membership is active only during login sessions"
+              - "  ✓ Users must log out and log back in for changes to take effect"
+              - "  ✓ SSHD will be restarted for PAM changes to take effect"
+              - "  ✓ Only /etc/pam.d/sshd is modified - no shared PAM files affected"
+              - ""
+              - "Files Modified:"
+              - "  - {{ group_conf_file }}"
+              - "  - {{ pam_sshd_file }}"
+              - "  - /etc/sssd/sssd.conf (via realm permit)"
+              - ""
+              - "=========================================="
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
+      listen: Restart sshd

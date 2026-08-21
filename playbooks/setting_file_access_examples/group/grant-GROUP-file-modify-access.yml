@@ -1,0 +1,46 @@
+---
+# Grant ACL modify (rw) access to a file for an AD group.
+# Defaults to the server's {hostname}-app_restricted group.
+#
+# Domain Group Naming Standard:
+#   {hostname}-app_restricted  -> default group
+#
+# SIMPLE USAGE EXAMPLE (uses default app-restricted group):
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-file-modify-access.yml \
+#   -e "modify_file=/etc/httpd/conf/httpd.conf"
+#
+# USAGE WITH CUSTOM GROUP:
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-file-modify-access.yml \
+#   -e "group_name=dev-team" -e "modify_file=/etc/httpd/conf/httpd.conf"
+
+- name: Grant ACL modify access to specified file
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  become: true
+  vars:
+    # Default to {hostname}-app_restricted group, or override with group_name
+    default_group: "{{ ansible_hostname | lower }}-app_restricted"
+    ad_group_name: "{{ group_name | default(default_group) }}"
+    file_path: "{{ modify_file }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable 'modify_file' is not defined"
+      when: modify_file is not defined
+
+    - name: Configure file modify access using declarative_access role (ACL only)
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ ad_group_name }}"
+        declarative_access_files_modify:
+          - "{{ file_path }}"
+      tags: setfacl
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "ACL modify access configured for AD group: {{ ad_group_name }}"
+          - "Modify access granted to file: {{ file_path }}"
+          - "Permissions set: rw (read + write)"

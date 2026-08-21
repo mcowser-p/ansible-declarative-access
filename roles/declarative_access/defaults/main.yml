@@ -1,0 +1,95 @@
+---
+# defaults file for declarative_access
+#
+# All role variables carry the `declarative_access_` prefix (Ansible Galaxy /
+# ansible-lint var-naming[no-role-prefix] standard). The entity receiving
+# access is EXACTLY ONE of declarative_access_user / declarative_access_group,
+# passed by the calling playbook — never defaulted here.
+
+# Feature toggles — set to true in your playbook to enable
+declarative_access_login: false
+declarative_access_sudo: false
+declarative_access_pam_group: false
+declarative_access_linger: false
+
+# Sudo configuration
+declarative_access_sudoers_path: "/etc/sudoers.d/"
+declarative_access_sudo_nopasswd: false
+declarative_access_sudo_runas: "ALL"
+declarative_access_sudoers_state: "present"
+
+# Unit grants — bare names only (no .service/.timer suffixes):
+#   services: plain systemd services            -> systemctl <action> <name>[.service]
+#   timers:   systemd timers                    -> systemctl <action> <name>.timer
+#   quadlets: podman-quadlet GENERATED services -> systemctl <action> <name>[.service]
+#             (foo.container -> 'foo', foo.pod -> 'foo-pod', ...)
+declarative_access_services: []
+declarative_access_timers: []
+declarative_access_quadlets: []
+
+# Extra raw sudo commands appended verbatim to the same sudoers file
+declarative_access_commands: []
+
+# systemctl actions granted per unit list.
+declarative_access_systemctl_actions:
+  - start
+  - stop
+  - restart
+  - reload
+  - status
+  - enable
+  - disable
+  - mask
+  - unmask
+# Timers are enable/disable-able units; 'reload' is omitted (timers do not
+# support it). Grants use the explicit <name>.timer form — a bare name would
+# resolve to the .service instead.
+declarative_access_timer_actions:
+  - start
+  - stop
+  - restart
+  - status
+  - enable
+  - disable
+  - mask
+  - unmask
+# Quadlet-generated services cannot be enabled/disabled/masked (they are
+# produced by a systemd generator at daemon-reload) — granting those actions
+# would be misleading, so the default set is lifecycle-only.
+declarative_access_quadlet_actions:
+  - start
+  - stop
+  - restart
+  - status
+
+# Rootless quadlet owners: `loginctl enable-linger` keeps their user manager
+# (and their user-level quadlets under ~/.config/containers/systemd/) running
+# without an open session. These users manage their own units via
+# `systemctl --user` — no sudo involved.
+declarative_access_linger_users: []
+
+# File/folder ownership (chown/chmod) — a list of entries, each:
+#   { path, owner, group, mode, recurse }
+# path may be a file OR a folder; owner/group/mode are optional (omitted keys
+# leave that attribute unchanged); recurse defaults to false.
+declarative_access_ownership: []
+
+# General
+declarative_access_debug: false
+
+# ACL permission strings (what each grant list applies)
+declarative_access_acl_file_read: "r"
+declarative_access_acl_file_modify: "rw"
+declarative_access_acl_file_exec: "rx"
+declarative_access_acl_folder_read: "rX"
+declarative_access_acl_folder_modify: "rwX"
+
+# PAM group configuration
+declarative_access_group_conf_file: "/etc/security/group.conf"
+declarative_access_pam_sshd_file: "/etc/pam.d/sshd"
+# Domain suffix for the group.conf principal. Set "" to map a LOCAL
+# (non-AD) user or group — the principal is then written without @domain.
+declarative_access_ad_domain: "example.com"
+# Local groups the entity is mapped into at SSH login. Must be non-empty
+# when declarative_access_pam_group is true (profiles supply the values).
+declarative_access_local_groups: []

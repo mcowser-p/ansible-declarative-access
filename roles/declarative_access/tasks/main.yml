@@ -1,0 +1,156 @@
+---
+# tasks file for declarative_access
+
+###########################################################################
+# Login
+###########################################################################
+- name: Login
+  ansible.builtin.include_tasks: login.yml
+
+- name: Login cleanup
+  ansible.builtin.import_tasks: login_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Sudo
+###########################################################################
+- name: Sudo
+  ansible.builtin.include_tasks: sudo.yml
+
+- name: Sudo cleanup
+  ansible.builtin.import_tasks: sudo_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# PAM Group - Temporary local group membership via pam_group.so
+###########################################################################
+- name: PAM Group
+  ansible.builtin.include_tasks: pam_group.yml
+
+- name: PAM Group cleanup
+  ansible.builtin.import_tasks: pam_group_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Linger - keep rootless systemd user services (quadlets) alive without a
+# login session
+###########################################################################
+- name: Linger
+  ansible.builtin.include_tasks: linger.yml
+
+- name: Linger cleanup
+  ansible.builtin.import_tasks: linger_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Ownership - chown/chmod on files and folders
+###########################################################################
+- name: Ownership
+  ansible.builtin.include_tasks: ownership.yml
+  when: declarative_access_ownership is defined and declarative_access_ownership | length > 0
+
+###########################################################################
+# SetFacl
+###########################################################################
+
+- name: SetFacl
+  when: >-
+    declarative_access_files_exec is defined or
+    declarative_access_files_read is defined or
+    declarative_access_files_modify is defined or
+    declarative_access_folders_read is defined or
+    declarative_access_folders_modify is defined
+  block:
+    - name: Ensure exactly one of user or group is set
+      ansible.builtin.assert:
+        that:
+          - >-
+            (declarative_access_user | default('') | length > 0)
+            != (declarative_access_group | default('') | length > 0)
+        fail_msg: "Error: Exactly one of declarative_access_user or declarative_access_group must be set (non-empty)."
+        success_msg: "Exactly one entity is set, proceeding."
+
+    # Facts are global for the play — clear stale values from previous
+    # role invocations first
+    - name: Clear stale ACL facts from previous invocations
+      ansible.builtin.set_fact:
+        declarative_access_acl_user: ""
+        declarative_access_acl_group: ""
+
+    - name: Set ACL user entity when user is given
+      ansible.builtin.set_fact:
+        declarative_access_acl_user: "{{ declarative_access_user }}"
+      when: declarative_access_user | default('') | length > 0
+
+    - name: Set ACL group entity when group is given
+      ansible.builtin.set_fact:
+        declarative_access_acl_group: "{{ declarative_access_group }}"
+      when: declarative_access_group | default('') | length > 0
+
+    #
+    # Setting the permissions
+    # Loops through each grant list and applies the permissions per item
+    #
+    - name: Apply exec permissions to executable files
+      when: declarative_access_files_exec is defined
+      ansible.builtin.include_tasks: setfacl.yml
+      vars:
+        declarative_access_target_path: "{{ item }}"
+        declarative_access_file_permissions: "{{ declarative_access_acl_file_exec }}"
+      loop: "{{ declarative_access_files_exec }}"
+      loop_control:
+        loop_var: item
+
+    - name: Apply read permissions to files
+      when: declarative_access_files_read is defined
+      ansible.builtin.include_tasks: setfacl.yml
+      vars:
+        declarative_access_target_path: "{{ item }}"
+        declarative_access_file_permissions: "{{ declarative_access_acl_file_read }}"
+      loop: "{{ declarative_access_files_read }}"
+      loop_control:
+        loop_var: item
+
+    - name: Apply modify permissions to files
+      when: declarative_access_files_modify is defined
+      ansible.builtin.include_tasks: setfacl.yml
+      vars:
+        declarative_access_target_path: "{{ item }}"
+        declarative_access_file_permissions: "{{ declarative_access_acl_file_modify }}"
+      loop: "{{ declarative_access_files_modify }}"
+      loop_control:
+        loop_var: item
+
+    - name: Apply read permissions to folders
+      when: declarative_access_folders_read is defined
+      ansible.builtin.include_tasks: setfacl.yml
+      vars:
+        declarative_access_target_path: "{{ item }}"
+        declarative_access_file_permissions: "{{ declarative_access_acl_folder_read }}"
+      loop: "{{ declarative_access_folders_read }}"
+      loop_control:
+        loop_var: item
+
+    - name: Apply modify permissions to folders
+      when: declarative_access_folders_modify is defined
+      ansible.builtin.include_tasks: setfacl.yml
+      vars:
+        declarative_access_target_path: "{{ item }}"
+        declarative_access_file_permissions: "{{ declarative_access_acl_folder_modify }}"
+      loop: "{{ declarative_access_folders_modify }}"
+      loop_control:
+        loop_var: item
+
+- name: SetFacl cleanup
+  ansible.builtin.import_tasks: setfacl_cleanup.yml
+  tags:
+    - cleanup
+    - never

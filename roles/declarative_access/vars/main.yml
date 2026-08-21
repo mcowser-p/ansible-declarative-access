@@ -1,0 +1,12 @@
+---
+# vars file for declarative_access
+#
+# This file is intentionally minimal. All role variables with defaults
+# are defined in defaults/main.yml, prefixed `declarative_access_`.
+# Variables that are required (declarative_access_group,
+# declarative_access_user, the declarative_access_files_*/folders_* grant
+# lists, etc.) should be passed by the calling playbook and are guarded by
+# defined/length checks in the task files.
+#
+# When using include_role (recommended), each invocation gets its own
+# variable scope, so there is no risk of variable bleed between calls.

@@ -1,0 +1,62 @@
+---
+# LIFECYCLE scenario — the end-to-end application-deployment rehearsal:
+#   cairn baseline -> team installs app (nginx + timer + quadlet) ->
+#   cairn footprint --access-vars -> apply the RAW generated profile via
+#   playbooks/5_apply_access_profile.yml (run INSIDE the container, so the
+#   real CLI path incl. `--tags cleanup` is exercised) -> flip the user to
+#   the restricted group -> verify allowed/denied -> revoke -> verify.
+#
+# LOCAL-ONLY: requires the cairn source tree, mounted via the CAIRN_SRC env
+# var. CI runs only the default scenario (`molecule test` without -s).
+#
+#   CAIRN_SRC=/path/to/cairn \
+#   [DOCKER_HOST=unix://$HOME/.docker/run/docker.sock] \
+#   molecule test -s lifecycle
+#
+# Runs a systemd-init image (privileged) because the lifecycle needs real
+# systemd: timers, the podman quadlet generator, and unit lifecycle checks.
+driver:
+  name: docker
+platforms:
+  - name: lifecycle9
+    image: almalinux/9-init
+    pre_build_image: true
+    command: /sbin/init
+    privileged: true
+    volumes:
+      - "${CAIRN_SRC:-/tmp/cairn-src-not-set}:/opt/cairn-src:ro"
+      - "${MOLECULE_PROJECT_DIRECTORY}:/opt/linux-access/roles/declarative_access:ro"
+  - name: lifecycle10
+    image: almalinux/10-init
+    pre_build_image: true
+    command: /sbin/init
+    privileged: true
+    volumes:
+      - "${CAIRN_SRC:-/tmp/cairn-src-not-set}:/opt/cairn-src:ro"
+      - "${MOLECULE_PROJECT_DIRECTORY}:/opt/linux-access/roles/declarative_access:ro"
+
+role_name_check: 1
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../../../requirements.yml
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_HOME: ../../
+    ANSIBLE_ROLES_PATH: ../../../../roles
+    ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections:../../../../collections
+    ANSIBLE_REMOTE_TMP:
+
+# The lifecycle is inherently stateful (baseline -> diff -> apply -> revoke),
+# so the idempotence step is meaningless here and is omitted.
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

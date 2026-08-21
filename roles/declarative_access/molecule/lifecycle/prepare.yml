@@ -1,0 +1,140 @@
+---
+# Prepare = everything that exists BEFORE the team gets access: the golden
+# image tooling, the simulated AD groups, cairn, and the cairn config.
+- name: Prepare the lifecycle host
+  hosts: all
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Wait for systemd to finish booting
+      ansible.builtin.command: systemctl is-system-running
+      register: lifecycle_systemd_state
+      changed_when: false
+      failed_when: false
+      retries: 12
+      delay: 5
+      until: (lifecycle_systemd_state.stdout | default('')) in ['running', 'degraded']
+
+    - name: Assert the cairn source tree is mounted (CAIRN_SRC)
+      ansible.builtin.stat:
+        path: /opt/cairn-src/pyproject.toml
+      register: lifecycle_cairn_src
+
+    - name: Fail with guidance when CAIRN_SRC is not set
+      ansible.builtin.assert:
+        that:
+          - lifecycle_cairn_src.stat.exists
+        fail_msg: >-
+          /opt/cairn-src is empty — export CAIRN_SRC=/path/to/the/cairn/repo
+          before running: CAIRN_SRC=... molecule test -s lifecycle
+        success_msg: "cairn source tree is mounted."
+
+    - name: Install platform tooling
+      ansible.builtin.package:
+        name:
+          - podman
+          - python3-pip
+          - sudo
+          - acl
+          - util-linux
+          - ansible-core
+          # openssh: the generated profile now carries pam_group keys, which
+          # the role wires into /etc/pam.d/sshd — and the behavioral check
+          # logs in over a real ssh session to prove the mapping.
+          - openssh-server
+          - openssh-clients
+        state: present
+
+    - name: Enable and start sshd (real systemd is available here)
+      ansible.builtin.service:
+        name: sshd
+        state: started
+        enabled: true
+
+    - name: Install cairn (from the mounted source) and PyYAML
+      ansible.builtin.command: pip3 install /opt/cairn-src pyyaml
+      args:
+        creates: /usr/local/bin/cairn
+
+    - name: Install collections the role needs inside the container
+      ansible.builtin.command: ansible-galaxy collection install community.general ansible.posix
+      args:
+        creates: /root/.ansible/collections/ansible_collections/community/general
+
+    - name: Create simulated AD groups (stand-ins for <hostname>-app_full / app-restricted)
+      ansible.builtin.group:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - wheel
+        - app-full-sim
+        - app-restricted-sim
+
+    # password '*' = no usable password but NOT locked (useradd's '!!'
+    # default counts as locked and blocks even pubkey ssh logins).
+    - name: Create the team member (setup phase = app-full + wheel)
+      ansible.builtin.user:
+        name: dev1
+        groups: app-full-sim,wheel
+        append: false
+        password: '*'
+        state: present
+
+    - name: Ensure /root/.ssh exists
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+
+    - name: Generate root test keypair for the behavioral ssh check
+      ansible.builtin.command: ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519
+      args:
+        creates: /root/.ssh/id_ed25519
+
+    - name: Read root test public key
+      ansible.builtin.slurp:
+        src: /root/.ssh/id_ed25519.pub
+      register: lifecycle_root_pubkey
+
+    - name: Authorize the root test key for dev1
+      ansible.posix.authorized_key:
+        user: dev1
+        key: "{{ lifecycle_root_pubkey.content | b64decode }}"
+        state: present
+
+    - name: Create cairn config and state directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/cairn
+        - /var/lib/cairn
+
+    - name: Install the footprint config with rehearsal excludes
+      ansible.builtin.shell: |
+        set -e
+        cp /opt/cairn-src/packaging/cairn-footprint-linux.yaml /etc/cairn/footprint.yaml
+        python3 - <<'EOF'
+        import yaml
+        cfg = yaml.safe_load(open("/etc/cairn/footprint.yaml"))
+        cfg.setdefault("exclude", []).extend(
+            ["/var/lib/containers/", "/var/lib/cairn/", "/etc/cairn/"])
+        yaml.safe_dump(cfg, open("/etc/cairn/footprint.yaml", "w"),
+                       default_flow_style=False)
+        EOF
+      args:
+        creates: /etc/cairn/footprint.yaml
+
+    - name: Create the playbook staging directory
+      ansible.builtin.file:
+        path: /opt/linux-access/playbooks
+        state: directory
+        mode: '0755'
+
+    - name: Stage the apply playbook inside the container
+      ansible.builtin.copy:
+        src: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/../../playbooks/5_apply_access_profile.yml"
+        dest: /opt/linux-access/playbooks/5_apply_access_profile.yml
+        mode: '0644'

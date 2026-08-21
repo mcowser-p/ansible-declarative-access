@@ -1,0 +1,46 @@
+---
+# Grant ACL read (rX) access to a folder for an AD group.
+# Defaults to the server's {hostname}-app_restricted group.
+#
+# Domain Group Naming Standard:
+#   {hostname}-app_restricted  -> default group
+#
+# SIMPLE USAGE EXAMPLE (uses default app-restricted group):
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-folder-read-access.yml \
+#   -e "read_folder=/var/log/httpd"
+#
+# USAGE WITH CUSTOM GROUP:
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-folder-read-access.yml \
+#   -e "group_name=dev-team" -e "read_folder=/var/log/httpd"
+
+- name: Grant ACL read access to specified folder
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  become: true
+  vars:
+    # Default to {hostname}-app_restricted group, or override with group_name
+    default_group: "{{ ansible_hostname | lower }}-app_restricted"
+    ad_group_name: "{{ group_name | default(default_group) }}"
+    folder_path: "{{ read_folder }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable 'read_folder' is not defined"
+      when: read_folder is not defined
+
+    - name: Configure folder read access using declarative_access role (ACL only)
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ ad_group_name }}"
+        declarative_access_folders_read:
+          - "{{ folder_path }}"
+      tags: setfacl
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "ACL read access configured for AD group: {{ ad_group_name }}"
+          - "Read access granted to: {{ folder_path }}"
+          - "Permissions set: rX (read + execute for directories)"

@@ -1,0 +1,88 @@
+---
+# TLS/SSL Certificate Administration Profile for Alma Linux
+#
+# Domain Group Naming Standard:
+#   {hostname}-app_restricted  -> default group for application profiles
+#   {hostname}-app_full        -> inherits app-restricted via AD group nesting
+#
+# SIMPLE USAGE EXAMPLE (uses default app-restricted group):
+# ansible-playbook -i inventory playbooks/application_profile_examples/tls-alma-linux.yml
+#
+# USAGE WITH CUSTOM GROUP:
+# ansible-playbook -i inventory playbooks/application_profile_examples/tls-alma-linux.yml \
+#   -e "group_name=ps-certadmins"
+#
+# CLEANUP (removes all access configured by this profile):
+# ansible-playbook -i inventory playbooks/application_profile_examples/tls-alma-linux.yml \
+#   --tags cleanup
+
+- name: Grant TLS/SSL certificate administration access for Alma Linux
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  vars:
+    # Use group_name OR user_name, not both
+    # Default: Uses {hostname}-app_restricted group
+    group_name: "{{ group_name | default('') }}"
+    user_name: "{{ user_name | default('') }}"
+
+
+    # Determine the default group based on hostname
+    default_group: "{{ ansible_hostname | lower }}-app_restricted"
+
+  tasks:
+    - name: Setup TLS/SSL certificate administration access
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ group_name if group_name else ('' if user_name else default_group) }}"
+        declarative_access_user: "{{ user_name if user_name else '' }}"
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_sudo_nopasswd: false
+
+        declarative_access_profile_name: "tls-cert-admin"
+
+        # SSL/TLS certificate management commands
+        declarative_access_commands:
+          - "/usr/bin/openssl"
+          - "/usr/bin/update-ca-trust"
+          - "/usr/bin/c_rehash"
+
+        # SSL/TLS directory access for Alma Linux (RHEL-based)
+        declarative_access_folders_modify:
+          - "/etc/pki/tls/"
+          - "/etc/pki/tls/certs/"
+          - "/etc/pki/tls/private/"
+          - "/etc/pki/ca-trust/source/anchors/"
+
+        declarative_access_folders_read:
+          - "/var/log/audit/"
+
+        declarative_access_files_read: []
+        declarative_access_files_modify: []
+        declarative_access_files_exec: []
+        declarative_access_services: []
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "TLS/SSL Certificate administration access configured for Alma Linux:"
+          - "  Group: {{ group_name if group_name else (user_name if user_name else default_group) }}"
+          - "  Profile: tls-cert-admin"
+          - ""
+          - "Certificate Management Commands:"
+          - "  - /usr/bin/openssl (certificate creation, signing, conversion)"
+          - "  - /usr/bin/update-ca-trust (update CA certificate trust store)"
+          - "  - /usr/bin/c_rehash (create symlinks for certificates)"
+          - ""
+          - "Directory Access (Modify):"
+          - "  - /etc/pki/tls/ (TLS configuration and certificates)"
+          - "  - /etc/pki/tls/certs/ (SSL certificates)"
+          - "  - /etc/pki/tls/private/ (private keys)"
+          - "  - /etc/pki/ca-trust/source/anchors/ (custom CA certificates)"
+          - ""
+          - "Directory Access (Read):"
+          - "  - /var/log/audit/ (audit logs for security monitoring)"
+          - ""
+          - "Sudoers file: /etc/sudoers.d/tls-cert-admin-{{ (group_name if group_name else (user_name if user_name else default_group)) | regex_replace('\\.', '-') | lower }}"
+          - "To remove access: ansible-playbook ... --tags cleanup"

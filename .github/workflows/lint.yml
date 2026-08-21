@@ -1,0 +1,26 @@
+---
+name: Lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lint tooling (pinned)
+        run: pip install -r requirements.txt
+
+      - name: Run ansible-lint
+        run: ansible-lint -c .github/workflows/etc/.ansible-lint
+
+      - name: Validate collection builds (mcowser_p.linux_access)
+        run: ansible-galaxy collection build --force

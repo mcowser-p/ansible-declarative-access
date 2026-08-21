@@ -1,0 +1,457 @@
+---
+###########################################################################
+# Test all five permission types using group-based access.
+#
+# The role treats user and group identically (just switches etype),
+# so we only need to test one entity type thoroughly.
+#
+# Each invocation uses a separate declarative_access_profile_name to avoid
+# sudoers file collisions, matching real-world usage.
+#
+# Verification (verify.yml) does the following:
+#   1. getfacl checks — verify exact ACL strings on every target
+#   2. su - test_user operations — prove ACLs work at the OS level
+#      (test_user is a member of test_group, so group ACLs apply)
+#   3. Sudo — comprehensive verification of all rendered sudoers commands
+#   4. PAM group — verify group.conf entries and pam_group.so in sshd
+#   5. Timers/quadlets — verify scoped unit grants (incl. absent actions)
+#   6. cairn contract — apply files/molecule-access-vars.yml end to end
+#   7. Cleanup — re-runs role with --tags cleanup, verifies removal
+###########################################################################
+
+- name: Test files_read permissions (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for files_read
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_files_read:
+          - /tmp/test_file_read/readme.txt
+          - /tmp/test_file_read/config/app.conf
+          - /tmp/test_file_read/nested/deep/data.csv
+
+- name: Test files_modify permissions (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for files_modify
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_files_modify:
+          - /tmp/test_file_modify/settings.txt
+          - /tmp/test_file_modify/data/state.dat
+
+- name: Test files_exec permissions (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for files_exec
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_files_exec:
+          - /tmp/test_file_exec/deploy.sh
+          - /tmp/test_file_exec/scripts/backup.sh
+
+- name: Test folders_read permissions (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for folders_read
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_folders_read:
+          - /tmp/test_folder_read
+
+- name: Test folders_modify permissions (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for folders_modify
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_folders_modify:
+          - /tmp/test_folder_modify
+
+- name: Test sudo with services and commands (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for sudo
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_profile_name: "test-app"
+        declarative_access_services:
+          - httpd
+          - nginx
+        declarative_access_commands:
+          - /usr/bin/tail -f /var/log/messages
+          - /usr/local/bin/deploy
+
+- name: Test pam_group with local group mapping (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for pam_group
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_pam_group: true
+        declarative_access_local_groups:
+          - httpd
+          - nginx
+
+###########################################################################
+# Timer and quadlet grants
+###########################################################################
+
+- name: Test sudo with timers only (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for timers
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_profile_name: "test-timers"
+        declarative_access_timers:
+          - molecule-maintenance
+
+- name: Test sudo with quadlets only (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for quadlets
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_profile_name: "test-quadlets"
+        declarative_access_quadlets:
+          - molecule-web
+
+###########################################################################
+# cairn contract — apply the committed vars-file fixture exactly the way
+# playbooks/5_apply_access_profile.yml would (vars file + entity at apply
+# time). Exercises services+timers+quadlets+unit-file write ACLs+folders+
+# ownership+linger (linger tasks are tag-skipped in containers) in one run.
+###########################################################################
+
+- name: Test combined cairn-contract profile from vars file
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - files/molecule-access-vars.yml
+  tasks:
+    - name: Apply declarative_access from the contract vars file
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        # The fixture carries linger: true (contract fidelity), but loginctl
+        # needs systemd-logind, which these containers do not run — override
+        # it off here. Tag-based skipping is not reliable under molecule
+        # because it passes its own --skip-tags on the CLI.
+        declarative_access_linger: false
+
+###########################################################################
+# Additional test variants
+###########################################################################
+
+- name: Test sudo with NOPASSWD enabled (group)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for sudo with nopass
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_sudo_nopasswd: true
+        declarative_access_profile_name: "test-nopass"
+        declarative_access_services:
+          - httpd
+
+- name: Test files_read permissions (user entity)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for files_read with user
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: test_user
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_files_read:
+          - /tmp/test_user_file_read/data.txt
+
+- name: Test folders_read permissions (user entity)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for folders_read with user
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: test_user
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_folders_read:
+          - /tmp/test_user_folder_read
+
+- name: Test sudo with user entity
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for sudo with user
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: test_user
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_profile_name: "test-user-app"
+        declarative_access_services:
+          - httpd
+
+- name: Test pam_group with user entity
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for pam_group with user
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: test_user
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_pam_group: true
+        declarative_access_local_groups:
+          - httpd
+
+- name: Test sudo without declarative_access_profile_name
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for sudo without profile name
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_services:
+          - httpd
+
+- name: Test folders_read through symlink
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for folders_read via symlink
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_folders_read:
+          - /tmp/test_symlink
+
+- name: Test sudo with runas override
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for sudo with runas
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_sudo_runas: "appuser"
+        declarative_access_profile_name: "test-runas"
+        declarative_access_services:
+          - httpd
+
+- name: Test sudo with empty unit lists and commands
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for sudo with empty lists
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_profile_name: "test-empty"
+        declarative_access_services: []
+        declarative_access_timers: []
+        declarative_access_quadlets: []
+        declarative_access_commands: []
+
+- name: Test ownership (chown/chmod)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for ownership
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_ownership:
+          - path: /tmp/test_ownership_dir
+            owner: ownership_user
+            group: ownership_group
+            mode: "0750"
+            recurse: true
+          - path: /tmp/test_ownership_file.txt
+            owner: ownership_user
+            group: ownership_group
+            mode: "0640"
+
+###########################################################################
+# Behavioral pam_group — LOCAL principals (ad_domain "") mapped into a
+# local group, proven over a real sshd by verify.yml. No AD anywhere.
+###########################################################################
+
+- name: Test pam_group behaviorally with a local user entity
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access mapping a local user via pam_group
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: pam_ssh_user
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_pam_group: true
+        declarative_access_ad_domain: ""
+        declarative_access_local_groups:
+          - pamtest-group
+
+- name: Test pam_group behaviorally with a local group entity
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access mapping a local group via pam_group
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: sim-ad-group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_pam_group: true
+        declarative_access_ad_domain: ""
+        declarative_access_local_groups:
+          - pamtest-group
+
+###########################################################################
+# Additional no-AD coverage variants
+###########################################################################
+
+- name: Test sudo with a custom systemctl action list
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access with only start/stop granted
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_profile_name: "test-actions"
+        declarative_access_services:
+          - httpd
+        declarative_access_systemctl_actions:
+          - start
+          - stop
+
+# verify.yml re-applies this profile with sudoers_state: absent and asserts
+# the file is gone (the absent path can't live here — a present/absent pair
+# in converge would break molecule's idempotence step).
+- name: Test sudo profile used for the sudoers_state absent check
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access for the state-absent fixture profile
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_profile_name: "test-absent"
+        declarative_access_services:
+          - httpd
+
+- name: Test pam_group with a custom (non-default) AD domain
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply declarative_access with ad_domain example.org
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: false
+        declarative_access_pam_group: true
+        declarative_access_ad_domain: "example.org"
+        declarative_access_local_groups:
+          - httpd
+
+# Applied here like any profile; verify.yml revokes it through a REAL
+# nested `ansible-playbook --tags cleanup` run (files/tagcleanup-playbook.yml)
+# to prove the cleanup/never tag wiring end to end.
+- name: Test combined profile for the --tags cleanup CLI test
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - files/tagcleanup-access.yml
+  tasks:
+    - name: Apply the tagcleanup profile from its vars file
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false

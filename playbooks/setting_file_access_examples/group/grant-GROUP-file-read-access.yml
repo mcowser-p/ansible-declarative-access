@@ -1,0 +1,45 @@
+---
+# Grant ACL read (r) access to a file for an AD group.
+# Defaults to the server's {hostname}-app_restricted group.
+#
+# Domain Group Naming Standard:
+#   {hostname}-app_restricted  -> default group
+#
+# SIMPLE USAGE EXAMPLE (uses default app-restricted group):
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-file-read-access.yml \
+#   -e "read_file=/etc/httpd/conf/httpd.conf"
+#
+# USAGE WITH CUSTOM GROUP:
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/group/grant-GROUP-file-read-access.yml \
+#   -e "group_name=dev-team" -e "read_file=/etc/httpd/conf/httpd.conf"
+
+- name: Grant ACL read access to specified file
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  become: true
+  vars:
+    # Default to {hostname}-app_restricted group, or override with group_name
+    default_group: "{{ ansible_hostname | lower }}-app_restricted"
+    ad_group_name: "{{ group_name | default(default_group) }}"
+    file_path: "{{ read_file }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable 'read_file' is not defined"
+      when: read_file is not defined
+
+    - name: Configure file read access using declarative_access role (ACL only)
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ ad_group_name }}"
+        declarative_access_files_read:
+          - "{{ file_path }}"
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "ACL read access configured for AD group: {{ ad_group_name }}"
+          - "Read access granted to file: {{ file_path }}"
+          - "Permissions set: r (read only)"

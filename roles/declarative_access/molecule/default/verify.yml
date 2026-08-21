@@ -1,0 +1,1904 @@
+---
+###########################################################################
+# Verify all five ACL permission types, sudo, and PAM group configuration.
+#
+# Sections:
+#   1-5.  ACL permissions (file_read, file_modify, file_exec, folder_read, folder_modify)
+#         + default ACL verification on folders
+#   6.    Sudo — comprehensive verification of all rendered sudoers commands + visudo lint
+#   7.    Real access tests — su as test_user to prove ACLs work at OS level
+#   8.    PAM Group — verify group.conf entries and pam_group.so in sshd
+#   9.    Sudo NOPASSWD variant — verify NOPASSWD present when sudo_nopass: true
+#   10.   User entity — ACLs, sudo, pam_group using user: instead of group:
+#   11.   Sudo without application_profile_name — file named without prefix
+#   12.   Symlink handling — ACLs resolve through symlinks to real target
+#   13.   runas_user override — verify custom runas in sudoers
+#   14.   Empty unit lists/commands — verify no sudoers file created
+#   15.   Timers — scoped <name>.timer grants (explicit suffix only)
+#   16.   Quadlets — lifecycle-only grants on the generated service
+#   17.   cairn contract — vars-file profile end to end: sudoers +
+#         unit-file write ACLs + folders + ownership
+#   18.   Cleanup — re-run with --tags cleanup, verify all files removed
+#         AND that granted ACLs are revoked (incl. default ACLs; a real
+#         su-based edit that previously succeeded must now be denied)
+#
+# Expected ACL outcomes (from defaults/main.yml):
+#   file_read    → r    → getfacl shows "group:test_group:r--"
+#   file_modify  → rw   → getfacl shows "group:test_group:rw-"
+#   file_exec    → rx   → getfacl shows "group:test_group:r-x"
+#   folder_read  → rX   → dirs "r-x", regular files "r--", scripts "r-x"
+#   folder_modify→ rwX  → dirs "rwx", regular files "rw-", scripts "rwx"
+#
+# Directory traversal: parent directories should have "rX" (r-x in getfacl)
+# so users can reach target paths.
+#
+# Note: login (realm permit) is not tested — requires real AD domain join.
+###########################################################################
+
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    ###########################################################################
+    # 1. file_read — individual files should have r--
+    ###########################################################################
+    - name: "file_read: Check ACLs on individual files"
+      ansible.builtin.command: getfacl {{ item }}
+      register: file_read_acl
+      changed_when: false
+      loop:
+        - /tmp/test_file_read/readme.txt
+        - /tmp/test_file_read/config/app.conf
+        - /tmp/test_file_read/nested/deep/data.csv
+
+    - name: "file_read: Verify files have r-- (read only, no write, no exec)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r--' in item.stdout"
+        fail_msg: "file_read FAILED: {{ item.item }} does not have group:test_group:r--"
+        success_msg: "file_read OK: {{ item.item }}"
+      loop: "{{ file_read_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "file_read: Verify traversal ACL on parent directories"
+      ansible.builtin.command: getfacl {{ item }}
+      register: file_read_traversal
+      changed_when: false
+      loop:
+        - /tmp/test_file_read
+        - /tmp/test_file_read/config
+        - /tmp/test_file_read/nested
+        - /tmp/test_file_read/nested/deep
+
+    - name: "file_read: Verify parent dirs have r-x (traversal)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r-x' in item.stdout"
+        fail_msg: "file_read traversal FAILED: {{ item.item }} missing group:test_group:r-x"
+        success_msg: "file_read traversal OK: {{ item.item }}"
+      loop: "{{ file_read_traversal.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    ###########################################################################
+    # 2. file_modify — individual files should have rw-
+    ###########################################################################
+    - name: "file_modify: Check ACLs on individual files"
+      ansible.builtin.command: getfacl {{ item }}
+      register: file_modify_acl
+      changed_when: false
+      loop:
+        - /tmp/test_file_modify/settings.txt
+        - /tmp/test_file_modify/data/state.dat
+
+    - name: "file_modify: Verify files have rw- (read-write, no exec)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:rw-' in item.stdout"
+        fail_msg: "file_modify FAILED: {{ item.item }} does not have group:test_group:rw-"
+        success_msg: "file_modify OK: {{ item.item }}"
+      loop: "{{ file_modify_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "file_modify: Verify traversal ACL on parent directories"
+      ansible.builtin.command: getfacl {{ item }}
+      register: file_modify_traversal
+      changed_when: false
+      loop:
+        - /tmp/test_file_modify
+        - /tmp/test_file_modify/data
+
+    - name: "file_modify: Verify parent dirs have r-x (traversal)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r-x' in item.stdout"
+        fail_msg: "file_modify traversal FAILED: {{ item.item }} missing group:test_group:r-x"
+        success_msg: "file_modify traversal OK: {{ item.item }}"
+      loop: "{{ file_modify_traversal.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    ###########################################################################
+    # 3. file_exec — individual scripts should have r-x
+    ###########################################################################
+    - name: "file_exec: Check ACLs on script files"
+      ansible.builtin.command: getfacl {{ item }}
+      register: file_exec_acl
+      changed_when: false
+      loop:
+        - /tmp/test_file_exec/deploy.sh
+        - /tmp/test_file_exec/scripts/backup.sh
+
+    - name: "file_exec: Verify scripts have r-x (read+exec)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r-x' in item.stdout"
+        fail_msg: "file_exec FAILED: {{ item.item }} does not have group:test_group:r-x"
+        success_msg: "file_exec OK: {{ item.item }}"
+      loop: "{{ file_exec_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "file_exec: Verify traversal ACL on parent directories"
+      ansible.builtin.command: getfacl {{ item }}
+      register: file_exec_traversal
+      changed_when: false
+      loop:
+        - /tmp/test_file_exec
+        - /tmp/test_file_exec/scripts
+
+    - name: "file_exec: Verify parent dirs have r-x (traversal)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r-x' in item.stdout"
+        fail_msg: "file_exec traversal FAILED: {{ item.item }} missing group:test_group:r-x"
+        success_msg: "file_exec traversal OK: {{ item.item }}"
+      loop: "{{ file_exec_traversal.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    ###########################################################################
+    # 4. folder_read — recursive rX
+    #    Directories: r-x
+    #    Regular files: r-- (rX applies r to files, no x since file has no x)
+    #    Scripts (.sh with x bit): r-x (rX preserves existing x)
+    ###########################################################################
+    - name: "folder_read: Check ACLs on directories (all 4 levels)"
+      ansible.builtin.command: getfacl {{ item }}
+      register: folder_read_dir_acl
+      changed_when: false
+      loop:
+        - /tmp/test_folder_read/level1
+        - /tmp/test_folder_read/level1/level2
+        - /tmp/test_folder_read/level1/level2/level3
+        - /tmp/test_folder_read/level1/level2/level3/level4
+
+    - name: "folder_read: Verify directories have r-x"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r-x' in item.stdout"
+          - "'group:test_group:rwx' not in item.stdout"
+        fail_msg: "folder_read dir FAILED: {{ item.item }} does not have group:test_group:r-x"
+        success_msg: "folder_read dir OK: {{ item.item }}"
+      loop: "{{ folder_read_dir_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "folder_read: Check ACLs on regular files"
+      ansible.builtin.command: getfacl {{ item }}
+      register: folder_read_file_acl
+      changed_when: false
+      loop:
+        - /tmp/test_folder_read/level1/file1.txt
+        - /tmp/test_folder_read/level1/level2/file2.txt
+        - /tmp/test_folder_read/level1/level2/level3/file3.txt
+        - /tmp/test_folder_read/level1/level2/level3/level4/file4.txt
+
+    - name: "folder_read: Verify regular files have r-- (no write, no exec)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r--' in item.stdout"
+        fail_msg: "folder_read file FAILED: {{ item.item }} does not have group:test_group:r--"
+        success_msg: "folder_read file OK: {{ item.item }}"
+      loop: "{{ folder_read_file_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "folder_read: Check ACLs on scripts (have x bit set)"
+      ansible.builtin.command: getfacl {{ item }}
+      register: folder_read_script_acl
+      changed_when: false
+      loop:
+        - /tmp/test_folder_read/level1/script1.sh
+        - /tmp/test_folder_read/level1/level2/script2.sh
+
+    - name: "folder_read: Verify scripts have r-x (rX preserves existing x)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r-x' in item.stdout"
+        fail_msg: "folder_read script FAILED: {{ item.item }} does not have group:test_group:r-x"
+        success_msg: "folder_read script OK: {{ item.item }}"
+      loop: "{{ folder_read_script_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "folder_read: Check default ACLs on target directory"
+      ansible.builtin.command: getfacl /tmp/test_folder_read
+      register: folder_read_top_acl
+      changed_when: false
+
+    - name: "folder_read: Debug default ACLs"
+      ansible.builtin.debug:
+        var: folder_read_top_acl.stdout_lines
+
+    - name: "folder_read: Verify default ACLs on target directory (new files inherit r-x)"
+      ansible.builtin.assert:
+        that:
+          - "'default:group:test_group:r-x' in folder_read_top_acl.stdout"
+        fail_msg: "folder_read default ACL FAILED: /tmp/test_folder_read missing default:group:test_group:r-x"
+        success_msg: "folder_read default ACL OK: /tmp/test_folder_read"
+
+    ###########################################################################
+    # 5. folder_modify — recursive rwX
+    #    Directories: rwx
+    #    Regular files: rw- (rwX applies rw to files, no x since file has no x)
+    #    Scripts (.sh with x bit): rwx (rwX preserves existing x)
+    ###########################################################################
+    - name: "folder_modify: Check ACLs on directories (all 4 levels)"
+      ansible.builtin.command: getfacl {{ item }}
+      register: folder_modify_dir_acl
+      changed_when: false
+      loop:
+        - /tmp/test_folder_modify/level1
+        - /tmp/test_folder_modify/level1/level2
+        - /tmp/test_folder_modify/level1/level2/level3
+        - /tmp/test_folder_modify/level1/level2/level3/level4
+
+    - name: "folder_modify: Verify directories have rwx"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:rwx' in item.stdout"
+        fail_msg: "folder_modify dir FAILED: {{ item.item }} does not have group:test_group:rwx"
+        success_msg: "folder_modify dir OK: {{ item.item }}"
+      loop: "{{ folder_modify_dir_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "folder_modify: Check ACLs on regular files"
+      ansible.builtin.command: getfacl {{ item }}
+      register: folder_modify_file_acl
+      changed_when: false
+      loop:
+        - /tmp/test_folder_modify/level1/file1.txt
+        - /tmp/test_folder_modify/level1/level2/file2.txt
+        - /tmp/test_folder_modify/level1/level2/level3/file3.txt
+        - /tmp/test_folder_modify/level1/level2/level3/level4/file4.txt
+
+    - name: "folder_modify: Verify regular files have rw- (no exec on non-scripts)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:rw-' in item.stdout"
+        fail_msg: "folder_modify file FAILED: {{ item.item }} does not have group:test_group:rw-"
+        success_msg: "folder_modify file OK: {{ item.item }}"
+      loop: "{{ folder_modify_file_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "folder_modify: Check ACLs on scripts (have x bit set)"
+      ansible.builtin.command: getfacl {{ item }}
+      register: folder_modify_script_acl
+      changed_when: false
+      loop:
+        - /tmp/test_folder_modify/level1/script1.sh
+        - /tmp/test_folder_modify/level1/level2/script2.sh
+
+    - name: "folder_modify: Verify scripts have rwx (rwX preserves existing x)"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:rwx' in item.stdout"
+        fail_msg: "folder_modify script FAILED: {{ item.item }} does not have group:test_group:rwx"
+        success_msg: "folder_modify script OK: {{ item.item }}"
+      loop: "{{ folder_modify_script_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "folder_modify: Check default ACLs on target directory"
+      ansible.builtin.command: getfacl /tmp/test_folder_modify
+      register: folder_modify_top_acl
+      changed_when: false
+
+    - name: "folder_modify: Debug default ACLs"
+      ansible.builtin.debug:
+        var: folder_modify_top_acl.stdout_lines
+
+    - name: "folder_modify: Verify default ACLs on target directory (new files inherit rwx)"
+      ansible.builtin.assert:
+        that:
+          - "'default:group:test_group:rwx' in folder_modify_top_acl.stdout"
+        fail_msg: "folder_modify default ACL FAILED: /tmp/test_folder_modify missing default:group:test_group:rwx"
+        success_msg: "folder_modify default ACL OK: /tmp/test_folder_modify"
+
+    ###########################################################################
+    # 6. Sudo — comprehensive verification of rendered sudoers file
+    #
+    # The converge passes services: [httpd, nginx] and commands: [tail, deploy]
+    # which should produce:
+    #   - 9 systemctl subcommands × 2 services × 2 variants (bare + .service) = 36
+    #   - 12 journalctl variants × 2 services = 24
+    #   - 1 daemon-reload
+    #   - 2 custom commands
+    #   Total: 63 commands in the sudoers file
+    ###########################################################################
+    - name: "sudo: Verify sudoers file exists"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-app-test_group
+      register: sudoers_file
+
+    - name: "sudo: Assert sudoers file was created"
+      ansible.builtin.assert:
+        that:
+          - sudoers_file.stat.exists
+        fail_msg: "sudo FAILED: /etc/sudoers.d/test-app-test_group does not exist"
+        success_msg: "sudo OK: sudoers file created"
+
+    - name: "sudo: Read sudoers file content"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/test-app-test_group
+      register: sudoers_raw
+
+    - name: "sudo: Decode sudoers content for assertions"
+      ansible.builtin.set_fact:
+        sudoers_decoded: "{{ sudoers_raw.content | b64decode }}"
+
+    - name: "sudo: Dump sudoers content for debugging"
+      ansible.builtin.debug:
+        var: sudoers_decoded
+
+    # --- Verify group entity and NOPASSWD ---
+    - name: "sudo: Verify group test_group is the sudoers entity"
+      ansible.builtin.assert:
+        that:
+          - "'%test_group' in sudoers_decoded"
+        fail_msg: "sudo FAILED: %test_group not found in sudoers"
+        success_msg: "sudo OK: group entity %test_group present"
+
+    - name: "sudo: Verify NOPASSWD is NOT set (sudo_nopass defaults to false)"
+      ansible.builtin.assert:
+        that:
+          - "'NOPASSWD' not in sudoers_decoded"
+        fail_msg: "sudo FAILED: NOPASSWD should not be set (sudo_nopass: false)"
+        success_msg: "sudo OK: NOPASSWD correctly absent"
+
+    # --- Verify ALL systemctl commands for each service ---
+    # 9 subcommands × 2 services, bare name (e.g., systemctl start httpd)
+    - name: "sudo: Verify systemctl {{ item.1 }} {{ item.0 }} in sudoers"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl ' + item.1 + ' ' + item.0 in sudoers_decoded"
+        fail_msg: "sudo FAILED: 'systemctl {{ item.1 }} {{ item.0 }}' not found"
+        success_msg: "sudo OK: systemctl {{ item.1 }} {{ item.0 }}"
+      loop: "{{ ['httpd', 'nginx'] | product(['start', 'stop', 'restart', 'reload', 'status', 'enable', 'disable', 'mask', 'unmask']) | list }}"
+      loop_control:
+        label: "systemctl {{ item.1 }} {{ item.0 }}"
+
+    # 9 subcommands × 2 services, .service suffix (e.g., systemctl start httpd.service)
+    - name: "sudo: Verify systemctl {{ item.1 }} {{ item.0 }}.service in sudoers"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl ' + item.1 + ' ' + item.0 + '.service' in sudoers_decoded"
+        fail_msg: "sudo FAILED: 'systemctl {{ item.1 }} {{ item.0 }}.service' not found"
+        success_msg: "sudo OK: systemctl {{ item.1 }} {{ item.0 }}.service"
+      loop: "{{ ['httpd', 'nginx'] | product(['start', 'stop', 'restart', 'reload', 'status', 'enable', 'disable', 'mask', 'unmask']) | list }}"
+      loop_control:
+        label: "systemctl {{ item.1 }} {{ item.0 }}.service"
+
+    # --- Verify ALL journalctl commands for each service ---
+    # Base journalctl commands: -u, -e -u, -ef -u (bare + .service)
+    - name: "sudo: Verify journalctl base commands for {{ item }}"
+      ansible.builtin.assert:
+        that:
+          - "'journalctl -u ' + item in sudoers_decoded"
+          - "'journalctl -e -u ' + item in sudoers_decoded"
+          - "'journalctl -ef -u ' + item in sudoers_decoded"
+          - "'journalctl -u ' + item + '.service' in sudoers_decoded"
+          - "'journalctl -e -u ' + item + '.service' in sudoers_decoded"
+          - "'journalctl -ef -u ' + item + '.service' in sudoers_decoded"
+        fail_msg: "sudo FAILED: journalctl base commands for {{ item }} not found"
+        success_msg: "sudo OK: journalctl base commands for {{ item }}"
+      loop:
+        - httpd
+        - nginx
+
+    # journalctl --since commands: -5m/-10m/-15m (bare + .service)
+    - name: "sudo: Verify journalctl --since -{{ item.1 }}m for {{ item.0 }}"
+      ansible.builtin.assert:
+        that:
+          - "'journalctl --since -' + item.1 + 'm -u ' + item.0 in sudoers_decoded"
+          - "'journalctl --since -' + item.1 + 'm -u ' + item.0 + '.service' in sudoers_decoded"
+        fail_msg: "sudo FAILED: journalctl --since -{{ item.1 }}m for {{ item.0 }} not found"
+        success_msg: "sudo OK: journalctl --since -{{ item.1 }}m for {{ item.0 }}"
+      loop: "{{ ['httpd', 'nginx'] | product(['5', '10', '15']) | list }}"
+      loop_control:
+        label: "journalctl --since -{{ item.1 }}m -u {{ item.0 }}"
+
+    # --- Verify daemon-reload ---
+    - name: "sudo: Verify daemon-reload in sudoers"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl daemon-reload' in sudoers_decoded"
+        fail_msg: "sudo FAILED: daemon-reload not found in sudoers"
+        success_msg: "sudo OK: daemon-reload configured"
+
+    # --- Verify custom commands ---
+    - name: "sudo: Verify custom commands in sudoers"
+      ansible.builtin.assert:
+        that:
+          - "'/usr/bin/tail -f /var/log/messages' in sudoers_decoded"
+          - "'/usr/local/bin/deploy' in sudoers_decoded"
+        fail_msg: "sudo FAILED: custom commands not found in sudoers"
+        success_msg: "sudo OK: custom commands configured"
+
+    # --- visudo lint validation ---
+    - name: "sudo: Lint sudoers file with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test-app-test_group
+      register: visudo_main_lint
+      changed_when: false
+
+    - name: "sudo: Assert sudoers file passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_main_lint.rc == 0
+        fail_msg: "sudo FAILED: visudo lint error: {{ visudo_main_lint.stderr }}"
+        success_msg: "sudo OK: sudoers file passes visudo validation"
+
+    ###########################################################################
+    # 7. Real access tests — su as test_user (member of test_group)
+    #    Proves the group ACLs actually grant OS-level access.
+    ###########################################################################
+    - name: "su: Test read access (cat file_read targets)"
+      ansible.builtin.command: su - test_user -c "cat {{ item }}"
+      register: su_read_results
+      changed_when: false
+      failed_when: false
+      loop:
+        - /tmp/test_file_read/readme.txt
+        - /tmp/test_file_read/config/app.conf
+        - /tmp/test_file_read/nested/deep/data.csv
+
+    - name: "su: Verify read access succeeded"
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: "su read FAILED: test_user cannot read {{ item.item }}"
+        success_msg: "su read OK: {{ item.item }}"
+      loop: "{{ su_read_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "su: Test modify access (append to file_modify targets)"
+      ansible.builtin.command: su - test_user -c "echo 'test_write' >> {{ item }}"
+      register: su_modify_results
+      changed_when: false
+      failed_when: false
+      loop:
+        - /tmp/test_file_modify/settings.txt
+        - /tmp/test_file_modify/data/state.dat
+
+    - name: "su: Verify modify access succeeded"
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: "su modify FAILED: test_user cannot write {{ item.item }}"
+        success_msg: "su modify OK: {{ item.item }}"
+      loop: "{{ su_modify_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "su: Test exec access (run file_exec targets)"
+      ansible.builtin.command: su - test_user -c "{{ item }}"
+      register: su_exec_results
+      changed_when: false
+      failed_when: false
+      loop:
+        - /tmp/test_file_exec/deploy.sh
+        - /tmp/test_file_exec/scripts/backup.sh
+
+    - name: "su: Verify exec access succeeded"
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: "su exec FAILED: test_user cannot execute {{ item.item }}"
+        success_msg: "su exec OK: {{ item.item }}"
+      loop: "{{ su_exec_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "su: Test folder_read access (list + cat files in read-only tree)"
+      ansible.builtin.command: su - test_user -c "cat {{ item }}"
+      register: su_folder_read_results
+      changed_when: false
+      failed_when: false
+      loop:
+        - /tmp/test_folder_read/level1/file1.txt
+        - /tmp/test_folder_read/level1/level2/level3/level4/file4.txt
+
+    - name: "su: Verify folder_read access succeeded"
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: "su folder_read FAILED: test_user cannot read {{ item.item }}"
+        success_msg: "su folder_read OK: {{ item.item }}"
+      loop: "{{ su_folder_read_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "su: Test folder_read denies write"
+      ansible.builtin.command: su - test_user -c "echo 'should_fail' >> {{ item }}"
+      register: su_folder_read_deny
+      changed_when: false
+      failed_when: false
+      loop:
+        - /tmp/test_folder_read/level1/file1.txt
+
+    - name: "su: Verify folder_read correctly denies write"
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+        fail_msg: "su folder_read FAILED: test_user should NOT be able to write {{ item.item }}"
+        success_msg: "su folder_read OK: write correctly denied on {{ item.item }}"
+      loop: "{{ su_folder_read_deny.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "su: Test folder_modify access (append to files in modify tree)"
+      ansible.builtin.command: su - test_user -c "echo 'test_write' >> {{ item }}"
+      register: su_folder_modify_results
+      changed_when: false
+      failed_when: false
+      loop:
+        - /tmp/test_folder_modify/level1/file1.txt
+        - /tmp/test_folder_modify/level1/level2/level3/level4/file4.txt
+
+    - name: "su: Verify folder_modify access succeeded"
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: "su folder_modify FAILED: test_user cannot write {{ item.item }}"
+        success_msg: "su folder_modify OK: {{ item.item }}"
+      loop: "{{ su_folder_modify_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    ###########################################################################
+    # 8. PAM Group — verify group.conf entries and pam_group.so in sshd
+    #
+    # We can't test actual AD login (requires domain join + SSH), but we
+    # verify the role correctly renders the configuration files:
+    #   - /etc/security/group.conf entries
+    #   - pam_group.so line in /etc/pam.d/sshd
+    ###########################################################################
+    - name: "pam_group: Verify group.conf exists"
+      ansible.builtin.stat:
+        path: /etc/security/group.conf
+      register: group_conf_stat
+
+    - name: "pam_group: Assert group.conf exists with correct permissions"
+      ansible.builtin.assert:
+        that:
+          - group_conf_stat.stat.exists
+          - group_conf_stat.stat.mode == '0644'
+        fail_msg: "pam_group FAILED: /etc/security/group.conf missing or wrong permissions"
+        success_msg: "pam_group OK: group.conf exists (0644)"
+
+    - name: "pam_group: Read group.conf content"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: group_conf_raw
+
+    - name: "pam_group: Decode group.conf content"
+      ansible.builtin.set_fact:
+        group_conf_content: "{{ group_conf_raw.content | b64decode }}"
+
+    - name: "pam_group: Dump group.conf for debugging"
+      ansible.builtin.debug:
+        var: group_conf_content
+
+    - name: "pam_group: Verify header comment"
+      ansible.builtin.assert:
+        that:
+          - "'# /etc/security/group.conf - PAM group membership configuration' in group_conf_content"
+        fail_msg: "pam_group FAILED: header comment missing from group.conf"
+        success_msg: "pam_group OK: header comment present"
+
+    - name: "pam_group: Verify format comment"
+      ansible.builtin.assert:
+        that:
+          - "'# Format: services;ttys;users;times;groups' in group_conf_content"
+        fail_msg: "pam_group FAILED: format comment missing from group.conf"
+        success_msg: "pam_group OK: format comment present"
+
+    - name: "pam_group: Verify httpd group entry in group.conf"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;%test_group@example.com;Al0000-2400;httpd' in group_conf_content"
+        fail_msg: "pam_group FAILED: httpd entry not found in group.conf"
+        success_msg: "pam_group OK: httpd entry present"
+
+    - name: "pam_group: Verify nginx group entry in group.conf"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;%test_group@example.com;Al0000-2400;nginx' in group_conf_content"
+        fail_msg: "pam_group FAILED: nginx entry not found in group.conf"
+        success_msg: "pam_group OK: nginx entry present"
+
+    - name: "pam_group: Read sshd PAM config"
+      ansible.builtin.slurp:
+        src: /etc/pam.d/sshd
+      register: pam_sshd_raw
+
+    - name: "pam_group: Decode sshd PAM content"
+      ansible.builtin.set_fact:
+        pam_sshd_content: "{{ pam_sshd_raw.content | b64decode }}"
+
+    - name: "pam_group: Verify pam_group.so is in sshd PAM config"
+      ansible.builtin.assert:
+        that:
+          - "'auth       required     pam_group.so' in pam_sshd_content"
+        fail_msg: "pam_group FAILED: pam_group.so not found in /etc/pam.d/sshd"
+        success_msg: "pam_group OK: pam_group.so present in sshd PAM config"
+
+    ###########################################################################
+    # 9. Sudo NOPASSWD variant — verify NOPASSWD IS present
+    ###########################################################################
+    - name: "nopass: Verify sudoers file exists"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-nopass-test_group
+      register: nopass_file
+
+    - name: "nopass: Assert sudoers file was created"
+      ansible.builtin.assert:
+        that:
+          - nopass_file.stat.exists
+        fail_msg: "nopass FAILED: /etc/sudoers.d/test-nopass-test_group does not exist"
+        success_msg: "nopass OK: sudoers file created"
+
+    - name: "nopass: Read sudoers content"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/test-nopass-test_group
+      register: nopass_raw
+
+    - name: "nopass: Verify NOPASSWD IS present"
+      ansible.builtin.assert:
+        that:
+          - "'NOPASSWD' in (nopass_raw.content | b64decode)"
+        fail_msg: "nopass FAILED: NOPASSWD not found (sudo_nopass: true was set)"
+        success_msg: "nopass OK: NOPASSWD correctly present"
+
+    - name: "nopass: Lint sudoers file with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test-nopass-test_group
+      register: visudo_nopass_lint
+      changed_when: false
+
+    - name: "nopass: Assert passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_nopass_lint.rc == 0
+        fail_msg: "nopass FAILED: visudo lint error: {{ visudo_nopass_lint.stderr }}"
+        success_msg: "nopass OK: passes visudo validation"
+
+    ###########################################################################
+    # 10. User entity — ACLs use user:test_user instead of group:test_group
+    ###########################################################################
+    - name: "user-entity: Check file_read ACL on user test file"
+      ansible.builtin.command: getfacl /tmp/test_user_file_read/data.txt
+      register: user_file_read_acl
+      changed_when: false
+
+    - name: "user-entity: Verify user:test_user:r-- on file"
+      ansible.builtin.assert:
+        that:
+          - "'user:test_user:r--' in user_file_read_acl.stdout"
+        fail_msg: "user-entity FAILED: user:test_user:r-- not found on /tmp/test_user_file_read/data.txt"
+        success_msg: "user-entity OK: user:test_user:r-- on file"
+
+    - name: "user-entity: Check folder_read ACL on user test directory"
+      ansible.builtin.command: getfacl /tmp/test_user_folder_read/subdir
+      register: user_folder_read_acl
+      changed_when: false
+
+    - name: "user-entity: Verify user:test_user:r-x on directory"
+      ansible.builtin.assert:
+        that:
+          - "'user:test_user:r-x' in user_folder_read_acl.stdout"
+        fail_msg: "user-entity FAILED: user:test_user:r-x not found on /tmp/test_user_folder_read/subdir"
+        success_msg: "user-entity OK: user:test_user:r-x on directory"
+
+    - name: "user-entity: Verify sudoers file exists for user"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-user-app-test_user
+      register: user_sudoers_file
+
+    - name: "user-entity: Assert user sudoers file was created"
+      ansible.builtin.assert:
+        that:
+          - user_sudoers_file.stat.exists
+        fail_msg: "user-entity FAILED: /etc/sudoers.d/test-user-app-test_user does not exist"
+        success_msg: "user-entity OK: user sudoers file created"
+
+    - name: "user-entity: Read user sudoers content"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/test-user-app-test_user
+      register: user_sudoers_raw
+
+    - name: "user-entity: Verify username (not %group) in sudoers"
+      ansible.builtin.assert:
+        that:
+          - "'test_user' in (user_sudoers_raw.content | b64decode)"
+          - "'%test_user' not in (user_sudoers_raw.content | b64decode)"
+        fail_msg: "user-entity FAILED: sudoers should contain 'test_user' not '%test_user'"
+        success_msg: "user-entity OK: username correctly used in sudoers (not group)"
+
+    - name: "user-entity: Lint user sudoers with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test-user-app-test_user
+      register: visudo_user_lint
+      changed_when: false
+
+    - name: "user-entity: Assert passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_user_lint.rc == 0
+        fail_msg: "user-entity FAILED: visudo lint error: {{ visudo_user_lint.stderr }}"
+        success_msg: "user-entity OK: passes visudo validation"
+
+    - name: "user-entity: Read group.conf for user entity pam_group"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: user_group_conf_raw
+
+    - name: "user-entity: Verify user entity in group.conf (no % prefix)"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;test_user@example.com;Al0000-2400;httpd' in (user_group_conf_raw.content | b64decode)"
+        fail_msg: "user-entity FAILED: test_user@example.com entry not found in group.conf"
+        success_msg: "user-entity OK: user entity correctly in group.conf (no % prefix)"
+
+    ###########################################################################
+    # 11. Sudo without application_profile_name — file named without prefix
+    ###########################################################################
+    - name: "no-profile: Verify sudoers file exists without prefix"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test_group
+      register: no_profile_file
+
+    - name: "no-profile: Assert sudoers file was created"
+      ansible.builtin.assert:
+        that:
+          - no_profile_file.stat.exists
+        fail_msg: "no-profile FAILED: /etc/sudoers.d/test_group does not exist"
+        success_msg: "no-profile OK: sudoers file created without prefix"
+
+    - name: "no-profile: Lint sudoers with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test_group
+      register: visudo_no_profile_lint
+      changed_when: false
+
+    - name: "no-profile: Assert passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_no_profile_lint.rc == 0
+        fail_msg: "no-profile FAILED: visudo lint error: {{ visudo_no_profile_lint.stderr }}"
+        success_msg: "no-profile OK: passes visudo validation"
+
+    ###########################################################################
+    # 12. Symlink — ACLs should be set on the resolved target, not the link
+    ###########################################################################
+    - name: "symlink: Check ACLs on resolved target directory"
+      ansible.builtin.command: getfacl /tmp/test_symlink_target
+      register: symlink_target_acl
+      changed_when: false
+
+    - name: "symlink: Verify group:test_group:r-x on resolved target"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r-x' in symlink_target_acl.stdout"
+        fail_msg: "symlink FAILED: group:test_group:r-x not found on /tmp/test_symlink_target"
+        success_msg: "symlink OK: ACLs set on resolved target directory"
+
+    - name: "symlink: Check ACLs on file inside symlink target"
+      ansible.builtin.command: getfacl /tmp/test_symlink_target/data.txt
+      register: symlink_file_acl
+      changed_when: false
+
+    - name: "symlink: Verify group:test_group:r-- on file inside target"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:r--' in symlink_file_acl.stdout"
+        fail_msg: "symlink FAILED: group:test_group:r-- not found on /tmp/test_symlink_target/data.txt"
+        success_msg: "symlink OK: ACLs set on file inside resolved target"
+
+    ###########################################################################
+    # 13. Sudo with runas_user override — verify (appuser) in sudoers
+    ###########################################################################
+    - name: "runas: Verify sudoers file exists"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-runas-test_group
+      register: runas_file
+
+    - name: "runas: Assert sudoers file was created"
+      ansible.builtin.assert:
+        that:
+          - runas_file.stat.exists
+        fail_msg: "runas FAILED: /etc/sudoers.d/test-runas-test_group does not exist"
+        success_msg: "runas OK: sudoers file created"
+
+    - name: "runas: Read sudoers content"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/test-runas-test_group
+      register: runas_raw
+
+    - name: "runas: Verify (appuser) instead of (ALL)"
+      ansible.builtin.assert:
+        that:
+          - "'appuser' in (runas_raw.content | b64decode)"
+          - "'(ALL)' not in (runas_raw.content | b64decode) or 'appuser' in (runas_raw.content | b64decode)"
+        fail_msg: "runas FAILED: appuser not found in sudoers"
+        success_msg: "runas OK: runas_user correctly set to appuser"
+
+    - name: "runas: Lint sudoers with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test-runas-test_group
+      register: visudo_runas_lint
+      changed_when: false
+
+    - name: "runas: Assert passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_runas_lint.rc == 0
+        fail_msg: "runas FAILED: visudo lint error: {{ visudo_runas_lint.stderr }}"
+        success_msg: "runas OK: passes visudo validation"
+
+    ###########################################################################
+    # 14. Empty services + commands — NO sudoers file should be created
+    ###########################################################################
+    - name: "empty: Verify NO sudoers file was created"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-empty-test_group
+      register: empty_file
+
+    - name: "empty: Assert sudoers file does NOT exist"
+      ansible.builtin.assert:
+        that:
+          - not empty_file.stat.exists
+        fail_msg: "empty FAILED: /etc/sudoers.d/test-empty-test_group should not exist with empty services/commands"
+        success_msg: "empty OK: no sudoers file created for empty services/commands"
+
+    ###########################################################################
+    # 15. Timers — scoped grants on molecule-maintenance.timer
+    #     Explicit .timer suffix only: systemctl resolves a bare name to the
+    #     .service, so a bare grant would target the wrong unit.
+    ###########################################################################
+    - name: "timers: Read sudoers content"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/test-timers-test_group
+      register: timers_raw
+
+    - name: "timers: Decode sudoers content"
+      ansible.builtin.set_fact:
+        timers_decoded: "{{ timers_raw.content | b64decode }}"
+
+    - name: "timers: Verify systemctl action grants on the .timer unit"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl ' + item + ' molecule-maintenance.timer' in timers_decoded"
+        fail_msg: "timers FAILED: 'systemctl {{ item }} molecule-maintenance.timer' not found"
+        success_msg: "timers OK: systemctl {{ item }} molecule-maintenance.timer"
+      loop:
+        - start
+        - stop
+        - restart
+        - status
+        - enable
+        - disable
+        - mask
+        - unmask
+
+    - name: "timers: Verify reload is NOT granted (timers do not support it)"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl reload molecule-maintenance.timer' not in timers_decoded"
+        fail_msg: "timers FAILED: reload should not be granted on a timer"
+        success_msg: "timers OK: reload correctly absent"
+
+    - name: "timers: Verify journalctl variants for the timer"
+      ansible.builtin.assert:
+        that:
+          - "'journalctl -u molecule-maintenance.timer' in timers_decoded"
+          - "'journalctl -e -u molecule-maintenance.timer' in timers_decoded"
+          - "'journalctl -ef -u molecule-maintenance.timer' in timers_decoded"
+          - "'journalctl --since -5m -u molecule-maintenance.timer' in timers_decoded"
+          - "'journalctl --since -10m -u molecule-maintenance.timer' in timers_decoded"
+          - "'journalctl --since -15m -u molecule-maintenance.timer' in timers_decoded"
+        fail_msg: "timers FAILED: journalctl timer variants not found"
+        success_msg: "timers OK: journalctl timer variants present"
+
+    - name: "timers: Verify daemon-reload in sudoers"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl daemon-reload' in timers_decoded"
+        fail_msg: "timers FAILED: daemon-reload not found"
+        success_msg: "timers OK: daemon-reload configured"
+
+    - name: "timers: Lint sudoers file with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test-timers-test_group
+      register: visudo_timers_lint
+      changed_when: false
+
+    - name: "timers: Assert passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_timers_lint.rc == 0
+        fail_msg: "timers FAILED: visudo lint error: {{ visudo_timers_lint.stderr }}"
+        success_msg: "timers OK: passes visudo validation"
+
+    ###########################################################################
+    # 16. Quadlets — lifecycle-only grants on the GENERATED service
+    #     (molecule-web.container generates molecule-web.service). Generator
+    #     units cannot be enabled/disabled/masked, so those must be ABSENT.
+    ###########################################################################
+    - name: "quadlets: Read sudoers content"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/test-quadlets-test_group
+      register: quadlets_raw
+
+    - name: "quadlets: Decode sudoers content"
+      ansible.builtin.set_fact:
+        quadlets_decoded: "{{ quadlets_raw.content | b64decode }}"
+
+    - name: "quadlets: Verify lifecycle actions in both forms"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl ' + item + ' molecule-web' in quadlets_decoded"
+          - "'systemctl ' + item + ' molecule-web.service' in quadlets_decoded"
+        fail_msg: "quadlets FAILED: 'systemctl {{ item }} molecule-web[.service]' not found"
+        success_msg: "quadlets OK: systemctl {{ item }} molecule-web[.service]"
+      loop:
+        - start
+        - stop
+        - restart
+        - status
+
+    - name: "quadlets: Verify enable/disable/mask/unmask are NOT granted"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl enable molecule-web' not in quadlets_decoded"
+          - "'systemctl disable molecule-web' not in quadlets_decoded"
+          - "'systemctl mask molecule-web' not in quadlets_decoded"
+          - "'systemctl unmask molecule-web' not in quadlets_decoded"
+        fail_msg: "quadlets FAILED: enable/disable/mask must not be granted on generator units"
+        success_msg: "quadlets OK: enable/disable/mask/unmask correctly absent"
+
+    - name: "quadlets: Verify journalctl variants for the generated service"
+      ansible.builtin.assert:
+        that:
+          - "'journalctl -u molecule-web' in quadlets_decoded"
+          - "'journalctl -u molecule-web.service' in quadlets_decoded"
+          - "'journalctl --since -15m -u molecule-web.service' in quadlets_decoded"
+        fail_msg: "quadlets FAILED: journalctl variants not found"
+        success_msg: "quadlets OK: journalctl variants present"
+
+    - name: "quadlets: Verify daemon-reload in sudoers"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl daemon-reload' in quadlets_decoded"
+        fail_msg: "quadlets FAILED: daemon-reload not found"
+        success_msg: "quadlets OK: daemon-reload configured"
+
+    - name: "quadlets: Lint sudoers file with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test-quadlets-test_group
+      register: visudo_quadlets_lint
+      changed_when: false
+
+    - name: "quadlets: Assert passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_quadlets_lint.rc == 0
+        fail_msg: "quadlets FAILED: visudo lint error: {{ visudo_quadlets_lint.stderr }}"
+        success_msg: "quadlets OK: passes visudo validation"
+
+    ###########################################################################
+    # 17. cairn contract — the committed vars-file fixture applied end to end
+    #     (services + timers + quadlets + unit-file write ACLs + folders +
+    #     ownership; linger is tag-skipped in containers)
+    ###########################################################################
+    - name: "contract: Read sudoers content"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/cairn-contract-test_group
+      register: contract_raw
+
+    - name: "contract: Decode sudoers content"
+      ansible.builtin.set_fact:
+        contract_decoded: "{{ contract_raw.content | b64decode }}"
+
+    - name: "contract: Verify service, timer, and quadlet grants coexist"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl start molecule-app' in contract_decoded"
+          - "'systemctl enable molecule-app' in contract_decoded"
+          - "'systemctl start molecule-maintenance.timer' in contract_decoded"
+          - "'systemctl start molecule-web.service' in contract_decoded"
+          - "'systemctl enable molecule-web' not in contract_decoded"
+          - "'systemctl daemon-reload' in contract_decoded"
+        fail_msg: "contract FAILED: expected mixed unit grants not rendered"
+        success_msg: "contract OK: service/timer/quadlet grants rendered together"
+
+    - name: "contract: Read group.conf for pam_group check"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: contract_group_conf_raw
+
+    - name: "contract: Verify pam_group mapping was rendered (service group)"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;%test_group@example.com;Al0000-2400;molecule-app' in (contract_group_conf_raw.content | b64decode)"
+        fail_msg: "contract FAILED: pam_group mapping test_group -> molecule-app not in group.conf"
+        success_msg: "contract OK: pam_group maps the team into the service group"
+
+    - name: "contract: Lint sudoers file with visudo"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/cairn-contract-test_group
+      register: visudo_contract_lint
+      changed_when: false
+
+    - name: "contract: Assert passes visudo validation"
+      ansible.builtin.assert:
+        that:
+          - visudo_contract_lint.rc == 0
+        fail_msg: "contract FAILED: visudo lint error: {{ visudo_contract_lint.stderr }}"
+        success_msg: "contract OK: passes visudo validation"
+
+    - name: "contract: Check write ACLs on installed unit files"
+      ansible.builtin.command: getfacl {{ item }}
+      register: contract_unit_acl
+      changed_when: false
+      loop:
+        - /etc/systemd/system/molecule-app.service
+        - /etc/systemd/system/molecule-maintenance.timer
+        - /etc/containers/systemd/molecule-web.container
+
+    - name: "contract: Verify unit files have rw- for the group"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:rw-' in item.stdout"
+        fail_msg: "contract FAILED: {{ item.item }} missing group:test_group:rw-"
+        success_msg: "contract OK: write ACL on {{ item.item }}"
+      loop: "{{ contract_unit_acl.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "contract: Real-behavior test — append to a unit file as test_user"
+      ansible.builtin.command: su - test_user -c "echo '# molecule contract edit' >> /etc/systemd/system/molecule-app.service"
+      register: contract_unit_edit
+      changed_when: false
+      failed_when: false
+
+    - name: "contract: Verify the unit-file edit succeeded"
+      ansible.builtin.assert:
+        that:
+          - contract_unit_edit.rc == 0
+        fail_msg: "contract FAILED: test_user cannot edit molecule-app.service despite files_modify grant"
+        success_msg: "contract OK: test_user can edit the granted unit file"
+
+    - name: "contract: Check folder ACLs"
+      ansible.builtin.command: getfacl {{ item }}
+      register: contract_folder_acl
+      changed_when: false
+      loop:
+        - /tmp/molecule-app-etc
+        - /tmp/molecule-app-logs
+
+    - name: "contract: Verify folders_modify grants rwx and folders_read grants r-x"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:rwx' in contract_folder_acl.results[0].stdout"
+          - "'group:test_group:r-x' in contract_folder_acl.results[1].stdout"
+          - "'group:test_group:rwx' not in contract_folder_acl.results[1].stdout"
+        fail_msg: "contract FAILED: folder ACLs incorrect"
+        success_msg: "contract OK: folder ACLs correct"
+
+    - name: "contract: Stat the ownership target"
+      ansible.builtin.stat:
+        path: /tmp/molecule-app-state
+      register: contract_ownership
+
+    - name: "contract: Verify ownership entry applied (owner/group/mode)"
+      ansible.builtin.assert:
+        that:
+          - contract_ownership.stat.pw_name == 'ownership_user'
+          - contract_ownership.stat.gr_name == 'ownership_group'
+          - contract_ownership.stat.mode == '0750'
+        fail_msg: "contract FAILED: /tmp/molecule-app-state has wrong owner/group/mode"
+        success_msg: "contract OK: ownership entry applied"
+
+###########################################################################
+# File Ownership — verify chown/chmod applied correctly
+###########################################################################
+- name: Verify file ownership
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: "ownership: Stat ownership directory"
+      ansible.builtin.stat:
+        path: /tmp/test_ownership_dir
+      register: ownership_dir
+
+    - name: "ownership: Assert directory ownership and mode"
+      ansible.builtin.assert:
+        that:
+          - ownership_dir.stat.pw_name == 'ownership_user'
+          - ownership_dir.stat.gr_name == 'ownership_group'
+          - ownership_dir.stat.mode == '0750'
+        fail_msg: "ownership FAILED: /tmp/test_ownership_dir has wrong owner/group/mode"
+        success_msg: "ownership OK: directory ownership and mode correct"
+
+    - name: "ownership: Stat recursive subdirectory"
+      ansible.builtin.stat:
+        path: /tmp/test_ownership_dir/subdir
+      register: ownership_subdir
+
+    - name: "ownership: Assert recursive ownership applied to subdirectory"
+      ansible.builtin.assert:
+        that:
+          - ownership_subdir.stat.pw_name == 'ownership_user'
+          - ownership_subdir.stat.gr_name == 'ownership_group'
+        fail_msg: "ownership FAILED: recursive ownership not applied to subdir"
+        success_msg: "ownership OK: recursive ownership applied to subdirectory"
+
+    - name: "ownership: Stat recursive file inside directory"
+      ansible.builtin.stat:
+        path: /tmp/test_ownership_dir/subdir/file2.txt
+      register: ownership_recursive_file
+
+    - name: "ownership: Assert recursive ownership applied to nested file"
+      ansible.builtin.assert:
+        that:
+          - ownership_recursive_file.stat.pw_name == 'ownership_user'
+          - ownership_recursive_file.stat.gr_name == 'ownership_group'
+        fail_msg: "ownership FAILED: recursive ownership not applied to nested file"
+        success_msg: "ownership OK: recursive ownership applied to nested file"
+
+    - name: "ownership: Stat single file"
+      ansible.builtin.stat:
+        path: /tmp/test_ownership_file.txt
+      register: ownership_file
+
+    - name: "ownership: Assert single file ownership and mode"
+      ansible.builtin.assert:
+        that:
+          - ownership_file.stat.pw_name == 'ownership_user'
+          - ownership_file.stat.gr_name == 'ownership_group'
+          - ownership_file.stat.mode == '0640'
+        fail_msg: "ownership FAILED: /tmp/test_ownership_file.txt has wrong owner/group/mode"
+        success_msg: "ownership OK: single file ownership and mode correct"
+
+###########################################################################
+# Behavioral pam_group — prove the mapping over a REAL ssh login.
+#
+# converge applied pam_group with ad_domain "" for a local user
+# (pam_ssh_user) and a local group (sim-ad-group containing
+# pam_ssh_member), both mapped into pamtest-group. pam_group.so grants
+# the group in pam_sm_setcred, which sshd calls even for pubkey logins —
+# so `ssh ... id` showing pamtest-group is the real thing, no AD needed.
+###########################################################################
+- name: Verify pam_group behavior over ssh
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "pam_ssh: Read group.conf"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: pam_ssh_group_conf_raw
+
+    - name: "pam_ssh: Verify local-principal entries (no @domain suffix)"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;pam_ssh_user;Al0000-2400;pamtest-group' in (pam_ssh_group_conf_raw.content | b64decode)"
+          - "'sshd;!tty*;%sim-ad-group;Al0000-2400;pamtest-group' in (pam_ssh_group_conf_raw.content | b64decode)"
+        fail_msg: "pam_ssh FAILED: local-principal group.conf entries missing"
+        success_msg: "pam_ssh OK: local user and local group entries rendered without a domain"
+
+    - name: "pam_ssh: Verify custom-domain entry rendered"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;%test_group@example.org;Al0000-2400;httpd' in (pam_ssh_group_conf_raw.content | b64decode)"
+        fail_msg: "pam_ssh FAILED: declarative_access_ad_domain=example.org entry missing"
+        success_msg: "pam_ssh OK: custom ad_domain plumbed through"
+
+    - name: "pam_ssh: Login as pam_ssh_user (user-entity mapping) and read id"
+      ansible.builtin.command: >-
+        ssh -i /root/.ssh/id_ed25519
+        -o BatchMode=yes -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5
+        pam_ssh_user@127.0.0.1 id
+      register: pam_ssh_user_id
+      changed_when: false
+      retries: 5
+      delay: 2
+      until: pam_ssh_user_id.rc == 0
+
+    - name: "pam_ssh: Assert ssh session carries pamtest-group (user entity)"
+      ansible.builtin.assert:
+        that:
+          - "'pamtest-group' in pam_ssh_user_id.stdout"
+        fail_msg: "pam_ssh FAILED: ssh session for pam_ssh_user lacks pamtest-group: {{ pam_ssh_user_id.stdout }}"
+        success_msg: "pam_ssh OK: pam_group placed pam_ssh_user into pamtest-group at ssh login"
+
+    - name: "pam_ssh: Login as pam_ssh_member (group-entity mapping) and read id"
+      ansible.builtin.command: >-
+        ssh -i /root/.ssh/id_ed25519
+        -o BatchMode=yes -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5
+        pam_ssh_member@127.0.0.1 id
+      register: pam_ssh_member_id
+      changed_when: false
+      retries: 5
+      delay: 2
+      until: pam_ssh_member_id.rc == 0
+
+    - name: "pam_ssh: Assert ssh session carries pamtest-group (group entity)"
+      ansible.builtin.assert:
+        that:
+          - "'sim-ad-group' in pam_ssh_member_id.stdout"
+          - "'pamtest-group' in pam_ssh_member_id.stdout"
+        fail_msg: "pam_ssh FAILED: ssh session for pam_ssh_member lacks pamtest-group: {{ pam_ssh_member_id.stdout }}"
+        success_msg: "pam_ssh OK: %sim-ad-group membership mapped into pamtest-group at ssh login"
+
+    - name: "pam_ssh: Control — NSS membership does NOT include pamtest-group"
+      ansible.builtin.command: id pam_ssh_user
+      register: pam_ssh_nss_id
+      changed_when: false
+
+    - name: "pam_ssh: Control — su session does NOT include pamtest-group"
+      ansible.builtin.command: su - pam_ssh_user -c id
+      register: pam_ssh_su_id
+      changed_when: false
+
+    - name: "pam_ssh: Assert the grant is session-scoped and sshd-only"
+      ansible.builtin.assert:
+        that:
+          - "'pamtest-group' not in pam_ssh_nss_id.stdout"
+          - "'pamtest-group' not in pam_ssh_su_id.stdout"
+        fail_msg: "pam_ssh FAILED: pamtest-group leaked outside sshd sessions (NSS: {{ pam_ssh_nss_id.stdout }} / su: {{ pam_ssh_su_id.stdout }})"
+        success_msg: "pam_ssh OK: group only granted in sshd sessions (group.conf services field respected)"
+
+###########################################################################
+# Negative validation — inputs the role must REJECT.
+#
+# Each case runs the role inside block/rescue: reaching the flag task
+# means the invalid input was accepted (fail), rescuing means the role
+# refused it as designed.
+###########################################################################
+- name: Verify negative validation
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "negative: services with .service suffix"
+      block:
+        - name: "negative: Attempt role with 'httpd.service' in services"
+          ansible.builtin.include_role:
+            name: declarative_access
+          vars:
+            declarative_access_group: test_group
+            declarative_access_login: false
+            declarative_access_sudo: true
+            declarative_access_profile_name: "neg-service"
+            declarative_access_services:
+              - httpd.service
+        - name: "negative: Flag that the suffixed service was accepted"
+          ansible.builtin.set_fact:
+            neg_service_rejected: false
+      rescue:
+        - name: "negative: Record expected rejection (service suffix)"
+          ansible.builtin.set_fact:
+            neg_service_rejected: true
+
+    - name: "negative: timers with .timer suffix"
+      block:
+        - name: "negative: Attempt role with 'backup.timer' in timers"
+          ansible.builtin.include_role:
+            name: declarative_access
+          vars:
+            declarative_access_group: test_group
+            declarative_access_login: false
+            declarative_access_sudo: true
+            declarative_access_profile_name: "neg-timer"
+            declarative_access_timers:
+              - backup.timer
+        - name: "negative: Flag that the suffixed timer was accepted"
+          ansible.builtin.set_fact:
+            neg_timer_rejected: false
+      rescue:
+        - name: "negative: Record expected rejection (timer suffix)"
+          ansible.builtin.set_fact:
+            neg_timer_rejected: true
+
+    - name: "negative: quadlets with .container suffix"
+      block:
+        - name: "negative: Attempt role with 'web.container' in quadlets"
+          ansible.builtin.include_role:
+            name: declarative_access
+          vars:
+            declarative_access_group: test_group
+            declarative_access_login: false
+            declarative_access_sudo: true
+            declarative_access_profile_name: "neg-quadlet"
+            declarative_access_quadlets:
+              - web.container
+        - name: "negative: Flag that the suffixed quadlet was accepted"
+          ansible.builtin.set_fact:
+            neg_quadlet_rejected: false
+      rescue:
+        - name: "negative: Record expected rejection (quadlet suffix)"
+          ansible.builtin.set_fact:
+            neg_quadlet_rejected: true
+
+    - name: "negative: pam_group with a nonexistent local group"
+      block:
+        - name: "negative: Attempt pam_group mapping to no-such-group"
+          ansible.builtin.include_role:
+            name: declarative_access
+          vars:
+            declarative_access_group: test_group
+            declarative_access_login: false
+            declarative_access_pam_group: true
+            declarative_access_local_groups:
+              - no-such-group
+        - name: "negative: Flag that the missing group was accepted"
+          ansible.builtin.set_fact:
+            neg_pam_rejected: false
+      rescue:
+        - name: "negative: Record expected rejection (missing local group)"
+          ansible.builtin.set_fact:
+            neg_pam_rejected: true
+            neg_pam_failure: "{{ ansible_failed_result | to_json }}"
+
+    - name: "negative: both user and group set"
+      block:
+        - name: "negative: Attempt role with user AND group entities"
+          ansible.builtin.include_role:
+            name: declarative_access
+          vars:
+            declarative_access_user: test_user
+            declarative_access_group: test_group
+            declarative_access_login: false
+            declarative_access_files_read:
+              - /tmp/test_file_read/readme.txt
+        - name: "negative: Flag that the dual entity was accepted"
+          ansible.builtin.set_fact:
+            neg_entity_rejected: false
+      rescue:
+        - name: "negative: Record expected rejection (dual entity)"
+          ansible.builtin.set_fact:
+            neg_entity_rejected: true
+
+    - name: "negative: Assert every invalid input was rejected"
+      ansible.builtin.assert:
+        that:
+          - neg_service_rejected
+          - neg_timer_rejected
+          - neg_quadlet_rejected
+          - neg_pam_rejected
+          - neg_entity_rejected
+        fail_msg: >-
+          negative FAILED: an invalid input was accepted
+          (service={{ neg_service_rejected }}, timer={{ neg_timer_rejected }},
+          quadlet={{ neg_quadlet_rejected }}, pam={{ neg_pam_rejected }},
+          entity={{ neg_entity_rejected }})
+        success_msg: "negative OK: all five invalid inputs rejected"
+
+    - name: "negative: Assert the missing-group failure carries remediation"
+      ansible.builtin.assert:
+        that:
+          - "'groupadd' in neg_pam_failure"
+        fail_msg: "negative FAILED: missing-group error lacks the groupadd remediation hint"
+        success_msg: "negative OK: missing-group error tells the operator how to fix it"
+
+    - name: "negative: Verify no artifacts were left by rejected invocations"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: neg_artifact_check
+      loop:
+        - /etc/sudoers.d/neg-service-test_group
+        - /etc/sudoers.d/neg-timer-test_group
+        - /etc/sudoers.d/neg-quadlet-test_group
+
+    - name: "negative: Assert no sudoers artifacts exist"
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: "negative FAILED: {{ item.item }} was created despite rejected input"
+        success_msg: "negative OK: {{ item.item }} not created"
+      loop: "{{ neg_artifact_check.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+###########################################################################
+# Custom action list + sudoers_state absent
+###########################################################################
+- name: Verify custom action list and sudoers state absent
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "actions: Read test-actions sudoers file"
+      ansible.builtin.slurp:
+        src: /etc/sudoers.d/test-actions-test_group
+      register: actions_sudoers_raw
+
+    - name: "actions: Decode sudoers content"
+      ansible.builtin.set_fact:
+        actions_sudoers: "{{ actions_sudoers_raw.content | b64decode }}"
+
+    - name: "actions: Assert only start/stop were granted"
+      ansible.builtin.assert:
+        that:
+          - "'/bin/systemctl start httpd' in actions_sudoers"
+          - "'/bin/systemctl stop httpd' in actions_sudoers"
+          - "'/bin/systemctl restart httpd' not in actions_sudoers"
+          - "'/bin/systemctl enable httpd' not in actions_sudoers"
+          - "'/bin/systemctl mask httpd' not in actions_sudoers"
+        fail_msg: "actions FAILED: custom systemctl_actions list not respected"
+        success_msg: "actions OK: only start/stop granted"
+
+    - name: "actions: Validate sudoers syntax"
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/test-actions-test_group
+      changed_when: false
+
+    - name: "absent: Assert the test-absent sudoers file exists first"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-absent-test_group
+      register: absent_before
+
+    - name: "absent: Precondition — file present from converge"
+      ansible.builtin.assert:
+        that:
+          - absent_before.stat.exists
+        fail_msg: "absent FAILED: precondition missing — converge did not create test-absent"
+        success_msg: "absent OK: precondition holds"
+
+    - name: "absent: Re-apply the profile with sudoers_state absent"
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: test_group
+        declarative_access_login: false
+        declarative_access_sudo: true
+        declarative_access_sudoers_state: "absent"
+        declarative_access_profile_name: "test-absent"
+        declarative_access_services:
+          - httpd
+
+    - name: "absent: Stat the sudoers file after absent run"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-absent-test_group
+      register: absent_after
+
+    - name: "absent: Assert the sudoers file was removed"
+      ansible.builtin.assert:
+        that:
+          - not absent_after.stat.exists
+        fail_msg: "absent FAILED: /etc/sudoers.d/test-absent-test_group still exists"
+        success_msg: "absent OK: sudoers_state=absent removed the file"
+
+###########################################################################
+# Real `--tags cleanup` CLI path — the tag wiring in tasks/main.yml
+# (import_tasks + tags: [cleanup, never]) can only be proven through an
+# actual ansible-playbook run; include_role cannot pass CLI tags. The
+# nested run targets this same container over the docker connection.
+###########################################################################
+- name: Verify real --tags cleanup CLI path
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: "tagcleanup: Precondition — sudoers file exists"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-tagcleanup-test_group
+      register: tagcleanup_sudoers_before
+
+    - name: "tagcleanup: Precondition — group.conf entry exists"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: tagcleanup_group_conf_before
+
+    - name: "tagcleanup: Assert preconditions"
+      ansible.builtin.assert:
+        that:
+          - tagcleanup_sudoers_before.stat.exists
+          - "'sshd;!tty*;%test_group@example.com;Al0000-2400;tagcleanup-group' in (tagcleanup_group_conf_before.content | b64decode)"
+        fail_msg: "tagcleanup FAILED: converge did not set up the tagcleanup profile"
+        success_msg: "tagcleanup OK: profile artifacts present before revocation"
+
+    - name: "tagcleanup: Run the real ansible-playbook --tags cleanup against this container"
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - "{{ inventory_hostname }},"
+          - -c
+          - community.docker.docker
+          - "{{ playbook_dir }}/files/tagcleanup-playbook.yml"
+          - --tags
+          - cleanup
+          - --skip-tags
+          - login,linger
+      environment:
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/files/nested-ansible.cfg"
+        ANSIBLE_ROLES_PATH: "{{ playbook_dir | dirname | dirname | dirname }}"
+        ANSIBLE_COLLECTIONS_PATH: "{{ lookup('env', 'HOME') }}/.ansible/collections"
+        ANSIBLE_HOME: "{{ lookup('env', 'HOME') }}/.ansible"
+      delegate_to: localhost
+      become: false
+      register: tagcleanup_run
+      changed_when: true
+
+    - name: "tagcleanup: Assert cleanup tasks ran and apply tasks did not"
+      ansible.builtin.assert:
+        that:
+          - "'Remove sudoers file for group' in tagcleanup_run.stdout"
+          - "'pam_group cleanup - Remove group membership entries' in tagcleanup_run.stdout"
+          - "'Checking syntax - services' not in tagcleanup_run.stdout"
+          - "'pam_group - Add group membership entries' not in tagcleanup_run.stdout"
+        fail_msg: "tagcleanup FAILED: unexpected task selection under --tags cleanup"
+        success_msg: "tagcleanup OK: only cleanup-tagged tasks ran"
+
+    - name: "tagcleanup: Stat sudoers file after revocation"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-tagcleanup-test_group
+      register: tagcleanup_sudoers_after
+
+    - name: "tagcleanup: Read group.conf after revocation"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: tagcleanup_group_conf_after
+
+    - name: "tagcleanup: Assert artifacts removed by the CLI cleanup"
+      ansible.builtin.assert:
+        that:
+          - not tagcleanup_sudoers_after.stat.exists
+          - "'tagcleanup-group' not in (tagcleanup_group_conf_after.content | b64decode)"
+        fail_msg: "tagcleanup FAILED: artifacts survived the real --tags cleanup run"
+        success_msg: "tagcleanup OK: real --tags cleanup fully revoked the profile"
+
+###########################################################################
+# Cleanup — call cleanup task files directly via tasks_from,
+# bypassing main.yml tag gating (the real --tags cleanup CLI path is
+# proven by the dedicated play above and by the lifecycle scenario).
+###########################################################################
+- name: Cleanup
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    # --- Cleanup: main group entity (test-app + pam_group) ---
+    - name: "cleanup: Sudo cleanup for main group test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_profile_name: "test-app"
+
+    - name: "cleanup: PAM group cleanup for main group test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: pam_group_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_local_groups:
+          - httpd
+          - nginx
+
+    # --- Cleanup: nopass variant ---
+    - name: "cleanup: Sudo cleanup for nopass test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_profile_name: "test-nopass"
+
+    # --- Cleanup: user entity (sudo + pam_group) ---
+    - name: "cleanup: Sudo cleanup for user entity"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_user: test_user
+        declarative_access_profile_name: "test-user-app"
+
+    - name: "cleanup: PAM group cleanup for user entity"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: pam_group_cleanup.yml
+      vars:
+        declarative_access_user: test_user
+        declarative_access_local_groups:
+          - httpd
+
+    # --- Cleanup: no profile name ---
+    - name: "cleanup: Sudo cleanup for no-profile test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+
+    # --- Cleanup: runas variant ---
+    - name: "cleanup: Sudo cleanup for runas test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_profile_name: "test-runas"
+
+    # --- Cleanup: timers / quadlets / cairn contract ---
+    - name: "cleanup: Sudo cleanup for timers test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_profile_name: "test-timers"
+
+    - name: "cleanup: Sudo cleanup for quadlets test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_profile_name: "test-quadlets"
+
+    - name: "cleanup: Sudo cleanup for cairn contract test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_profile_name: "cairn-contract"
+
+    - name: "cleanup: PAM group cleanup for cairn contract test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: pam_group_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_local_groups:
+          - molecule-app
+
+    # --- Cleanup: behavioral pam_ssh profiles (local principals, no domain) ---
+    - name: "cleanup: PAM group cleanup for local user entity"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: pam_group_cleanup.yml
+      vars:
+        declarative_access_user: pam_ssh_user
+        declarative_access_ad_domain: ""
+        declarative_access_local_groups:
+          - pamtest-group
+
+    - name: "cleanup: PAM group cleanup for local group entity"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: pam_group_cleanup.yml
+      vars:
+        declarative_access_group: sim-ad-group
+        declarative_access_ad_domain: ""
+        declarative_access_local_groups:
+          - pamtest-group
+
+    # --- Cleanup: custom-domain variant (must pass the SAME domain) ---
+    - name: "cleanup: PAM group cleanup for custom-domain test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: pam_group_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_ad_domain: "example.org"
+        declarative_access_local_groups:
+          - httpd
+
+    # --- Cleanup: custom action list variant ---
+    - name: "cleanup: Sudo cleanup for custom-actions test"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: sudo_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_profile_name: "test-actions"
+
+    - name: "cleanup: Wait for cleanup to complete"
+      ansible.builtin.pause:
+        seconds: 2
+
+    # --- Verify all sudoers files removed ---
+    - name: "cleanup: Verify all sudoers files were removed"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: cleanup_sudoers_check
+      loop:
+        - /etc/sudoers.d/test-app-test_group
+        - /etc/sudoers.d/test-nopass-test_group
+        - /etc/sudoers.d/test-user-app-test_user
+        - /etc/sudoers.d/test_group
+        - /etc/sudoers.d/test-runas-test_group
+        - /etc/sudoers.d/test-timers-test_group
+        - /etc/sudoers.d/test-quadlets-test_group
+        - /etc/sudoers.d/cairn-contract-test_group
+        - /etc/sudoers.d/test-actions-test_group
+        - /etc/sudoers.d/test-absent-test_group
+        - /etc/sudoers.d/test-tagcleanup-test_group
+
+    - name: "cleanup: Assert all sudoers files are gone"
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: "cleanup FAILED: {{ item.item }} still exists"
+        success_msg: "cleanup OK: {{ item.item }} removed"
+      loop: "{{ cleanup_sudoers_check.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # --- Verify pam_group cleanup ---
+    - name: "cleanup: Read group.conf after cleanup"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: group_conf_cleanup_raw
+
+    - name: "cleanup: Decode group.conf after cleanup"
+      ansible.builtin.set_fact:
+        group_conf_after_cleanup: "{{ group_conf_cleanup_raw.content | b64decode }}"
+
+    - name: "cleanup: Dump group.conf after cleanup for debugging"
+      ansible.builtin.debug:
+        var: group_conf_after_cleanup
+
+    - name: "cleanup: Verify group entity entries removed from group.conf"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;%test_group@example.com;Al0000-2400;httpd' not in group_conf_after_cleanup"
+          - "'sshd;!tty*;%test_group@example.com;Al0000-2400;nginx' not in group_conf_after_cleanup"
+        fail_msg: "cleanup FAILED: group entity entries still in group.conf"
+        success_msg: "cleanup OK: group entity entries removed from group.conf"
+
+    - name: "cleanup: Verify user entity entries removed from group.conf"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;test_user@example.com;Al0000-2400;httpd' not in group_conf_after_cleanup"
+        fail_msg: "cleanup FAILED: user entity entry still in group.conf"
+        success_msg: "cleanup OK: user entity entry removed from group.conf"
+
+    - name: "cleanup: Verify local-principal and custom-domain entries removed"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;pam_ssh_user;Al0000-2400;pamtest-group' not in group_conf_after_cleanup"
+          - "'sshd;!tty*;%sim-ad-group;Al0000-2400;pamtest-group' not in group_conf_after_cleanup"
+          - "'sshd;!tty*;%test_group@example.org;Al0000-2400;httpd' not in group_conf_after_cleanup"
+        fail_msg: "cleanup FAILED: local-principal or custom-domain entries still in group.conf"
+        success_msg: "cleanup OK: local-principal and custom-domain entries removed"
+
+    - name: "cleanup: Behavioral — fresh ssh session no longer carries pamtest-group"
+      ansible.builtin.command: >-
+        ssh -i /root/.ssh/id_ed25519
+        -o BatchMode=yes -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5
+        pam_ssh_user@127.0.0.1 id
+      register: pam_ssh_revoked_id
+      changed_when: false
+
+    - name: "cleanup: Assert behavioral revocation of the pam_group mapping"
+      ansible.builtin.assert:
+        that:
+          - pam_ssh_revoked_id.rc == 0
+          - "'pamtest-group' not in pam_ssh_revoked_id.stdout"
+        fail_msg: "cleanup FAILED: pam_ssh_user still lands in pamtest-group after cleanup: {{ pam_ssh_revoked_id.stdout }}"
+        success_msg: "cleanup OK: ssh session no longer carries pamtest-group (behavioral revocation proven)"
+
+    - name: "cleanup: Verify pam_group.so remains in sshd (not removed by cleanup)"
+      ansible.builtin.slurp:
+        src: /etc/pam.d/sshd
+      register: pam_sshd_cleanup_raw
+
+    - name: "cleanup: Assert pam_group.so still present (cleanup does not remove it)"
+      ansible.builtin.assert:
+        that:
+          - "'pam_group.so' in (pam_sshd_cleanup_raw.content | b64decode)"
+        fail_msg: "cleanup FAILED: pam_group.so was incorrectly removed from sshd PAM config"
+        success_msg: "cleanup OK: pam_group.so correctly retained in sshd PAM config"
+
+    # --- Cleanup: ACL revocation (setfacl_cleanup) ---
+    - name: "cleanup: ACL cleanup for contract + folder/file grants (group)"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: setfacl_cleanup.yml
+      vars:
+        declarative_access_group: test_group
+        declarative_access_files_modify:
+          - /etc/systemd/system/molecule-app.service
+          - /etc/systemd/system/molecule-maintenance.timer
+          - /etc/containers/systemd/molecule-web.container
+        declarative_access_files_read:
+          - /tmp/test_file_read/readme.txt
+        declarative_access_files_exec:
+          - /tmp/test_file_exec/deploy.sh
+          - /tmp/test_file_exec/scripts/backup.sh
+        declarative_access_folders_modify:
+          - /tmp/molecule-app-etc
+          - /tmp/test_folder_modify
+        declarative_access_folders_read:
+          - /tmp/molecule-app-logs
+
+    - name: "cleanup: ACL cleanup for user entity file"
+      ansible.builtin.include_role:
+        name: declarative_access
+        tasks_from: setfacl_cleanup.yml
+      vars:
+        declarative_access_user: test_user
+        declarative_access_files_read:
+          - /tmp/test_user_file_read/data.txt
+
+    - name: "cleanup: Check ACLs after revocation"
+      ansible.builtin.command: getfacl {{ item }}
+      register: acl_cleanup_check
+      changed_when: false
+      loop:
+        - /etc/systemd/system/molecule-app.service
+        - /etc/systemd/system/molecule-maintenance.timer
+        - /etc/containers/systemd/molecule-web.container
+        - /tmp/molecule-app-etc
+        - /tmp/molecule-app-logs
+        - /tmp/test_folder_modify
+        - /tmp/test_folder_modify/level1/file1.txt
+        - /tmp/test_file_read/readme.txt
+        - /tmp/test_file_exec/deploy.sh
+        - /tmp/test_file_exec/scripts/backup.sh
+
+    - name: "cleanup: Verify group ACL entries (incl. defaults) are gone"
+      ansible.builtin.assert:
+        that:
+          - "'group:test_group:' not in item.stdout"
+          - "'default:group:test_group:' not in item.stdout"
+        fail_msg: "acl cleanup FAILED: {{ item.item }} still carries a test_group ACL"
+        success_msg: "acl cleanup OK: {{ item.item }}"
+      loop: "{{ acl_cleanup_check.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "cleanup: Check user-entity ACL after revocation"
+      ansible.builtin.command: getfacl /tmp/test_user_file_read/data.txt
+      register: acl_cleanup_user_check
+      changed_when: false
+
+    - name: "cleanup: Verify user ACL entry is gone"
+      ansible.builtin.assert:
+        that:
+          - "'user:test_user:' not in acl_cleanup_user_check.stdout"
+        fail_msg: "acl cleanup FAILED: user:test_user ACL still on /tmp/test_user_file_read/data.txt"
+        success_msg: "acl cleanup OK: user entity ACL removed"
+
+    - name: "cleanup: Real-behavior — previously granted unit-file edit is now denied"
+      ansible.builtin.command: su - test_user -c "echo '# revoked' >> /etc/systemd/system/molecule-app.service"
+      register: acl_cleanup_edit_denied
+      changed_when: false
+      failed_when: false
+
+    - name: "cleanup: Verify the revoked edit fails"
+      ansible.builtin.assert:
+        that:
+          - acl_cleanup_edit_denied.rc != 0
+        fail_msg: "acl cleanup FAILED: test_user can still edit molecule-app.service after cleanup"
+        success_msg: "acl cleanup OK: unit-file edit denied after ACL revocation"

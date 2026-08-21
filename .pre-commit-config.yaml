@@ -1,0 +1,37 @@
+# See https://pre-commit.com for more information
+repos:
+  - repo: https://github.com/ansible/ansible-lint
+    rev: 8ba9595a4acd1b906eb75568b34f6ef592cd1528  # v26.3.0
+    hooks:
+      - id: ansible-lint
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=5000']
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: local
+    hooks:
+      - id: lint
+        name: Lint YAML files
+        entry: scripts/pc_lint.sh
+        language: script
+        files: \.(ya?ml)$
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: 91ab4bf57e58b32adf1a122681f6ebe164d081c8
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          - feat
+          - fix
+          - patch
+          - docs
+          - chore

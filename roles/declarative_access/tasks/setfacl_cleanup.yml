@@ -1,0 +1,101 @@
+---
+# Remove the POSIX ACLs this profile granted (the reverse of setfacl.yml).
+#
+# Runs only with --tags cleanup. Removes the entity's access ACLs from every
+# path in the five grant lists — recursively for folders, including default
+# ACLs. Combined with the sudo/pam_group/linger cleanups, this makes
+# `--tags cleanup` a full revocation: a previously granted unit-file edit
+# ability is gone afterwards.
+#
+# Deliberately LEFT in place: the parent-directory traverse (rX) entries the
+# apply side sets on ancestors. They are shared by every profile of the same
+# entity, so removing them here could break a sibling profile; they grant
+# traverse only. Remove manually if desired:
+#   setfacl -x g:<group> /parent/dir      (or -x u:<user>)
+#
+# Ownership (declarative_access_ownership) has no cleanup on purpose:
+# ownership is applied state, not a grant — the previous owners are unknown.
+# Re-chown deliberately if it must be reverted.
+
+- name: setfacl cleanup
+  when: >-
+    declarative_access_files_exec is defined or
+    declarative_access_files_read is defined or
+    declarative_access_files_modify is defined or
+    declarative_access_folders_read is defined or
+    declarative_access_folders_modify is defined
+  block:
+    - name: setfacl cleanup - Ensure exactly one of user or group is set
+      ansible.builtin.assert:
+        that:
+          - >-
+            (declarative_access_user | default('') | length > 0)
+            != (declarative_access_group | default('') | length > 0)
+        fail_msg: "Error: Exactly one of declarative_access_user or declarative_access_group must be set (non-empty)."
+        success_msg: "Exactly one entity is set, proceeding."
+
+    - name: setfacl cleanup - Resolve ACL entity
+      ansible.builtin.set_fact:
+        declarative_access_acl_cleanup_etype: "{{ 'group' if declarative_access_group | default('') | length > 0 else 'user' }}"
+        declarative_access_acl_cleanup_entity: "{{ declarative_access_group | default('') if declarative_access_group | default('') | length > 0 else declarative_access_user | default('') }}"
+
+    - name: setfacl cleanup - Resolve setfacl entity spec
+      ansible.builtin.set_fact:
+        declarative_access_acl_cleanup_spec: "{{ ('g' if declarative_access_acl_cleanup_etype == 'group' else 'u') + ':' + declarative_access_acl_cleanup_entity }}"
+
+    - name: setfacl cleanup - Build target lists
+      ansible.builtin.set_fact:
+        declarative_access_acl_cleanup_files: >-
+          {{ ((declarative_access_files_read | default([]))
+              + (declarative_access_files_modify | default([]))
+              + (declarative_access_files_exec | default([]))) | unique }}
+        declarative_access_acl_cleanup_folders: >-
+          {{ ((declarative_access_folders_read | default([]))
+              + (declarative_access_folders_modify | default([]))) | unique }}
+
+    # Symlinks are followed (same as the apply side); paths that no longer
+    # exist are skipped quietly — the install may already be gone.
+    - name: setfacl cleanup - Stat file targets
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: true
+      register: declarative_access_acl_cleanup_file_stats
+      loop: "{{ declarative_access_acl_cleanup_files }}"
+
+    - name: setfacl cleanup - Remove ACL entries from files
+      ansible.posix.acl:
+        path: "{{ item.item }}"
+        entity: "{{ declarative_access_acl_cleanup_entity }}"
+        etype: "{{ declarative_access_acl_cleanup_etype }}"
+        state: absent
+      loop: "{{ declarative_access_acl_cleanup_file_stats.results }}"
+      when: item.stat.exists and item.stat.isreg
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: setfacl cleanup - Stat folder targets
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: true
+      register: declarative_access_acl_cleanup_folder_stats
+      loop: "{{ declarative_access_acl_cleanup_folders }}"
+
+    - name: setfacl cleanup - Remove access ACL entries from folders (recursive)
+      ansible.builtin.command:
+        cmd: "setfacl -R -x {{ declarative_access_acl_cleanup_spec }} {{ item.item }}"
+      loop: "{{ declarative_access_acl_cleanup_folder_stats.results }}"
+      when: item.stat.exists and item.stat.isdir
+      changed_when: false
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: setfacl cleanup - Remove default ACL entries from folders (recursive)
+      ansible.builtin.command:
+        cmd: "setfacl -R -d -x {{ declarative_access_acl_cleanup_spec }} {{ item.item }}"
+      loop: "{{ declarative_access_acl_cleanup_folder_stats.results }}"
+      when: item.stat.exists and item.stat.isdir
+      changed_when: false
+      loop_control:
+        label: "{{ item.item }}"
+
+  # Runs only when --tags cleanup is applied

@@ -1,0 +1,23 @@
+---
+# Standalone playbook for the real `--tags cleanup` CLI-path test.
+#
+# verify.yml runs this from the molecule controller with:
+#   ansible-playbook -i <container>, -c community.docker.docker \
+#     tagcleanup-playbook.yml --tags cleanup --skip-tags login,linger
+#
+# import_role is static, so the cleanup/never tags inside tasks/main.yml
+# survive to the CLI — exactly how playbooks/5_apply_access_profile.yml
+# revokes a profile in production.
+- name: Tagcleanup fixture profile
+  hosts: all
+  become: true
+  gather_facts: false
+  vars_files:
+    - tagcleanup-access.yml
+  vars:
+    declarative_access_group: test_group
+    declarative_access_login: false
+  tasks:
+    - name: Apply or clean the tagcleanup profile
+      ansible.builtin.import_role:
+        name: declarative_access

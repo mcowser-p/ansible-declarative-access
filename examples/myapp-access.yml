@@ -1,0 +1,42 @@
+---
+# Example declarative-access profile — the EXACT shape `cairn footprint
+# --access-vars` emits (see docs/declarative-systemd-access.md).
+#
+# Apply with:
+#   ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
+#     -e @examples/myapp-access.yml -e "group_name=<hostname>-app_restricted"
+#
+# WHO gets the access is intentionally NOT in this file:
+# declarative_access_user / declarative_access_group are passed at apply time.
+declarative_access_profile_name: 'myapp'
+declarative_access_sudo: true
+declarative_access_services:
+  - 'myapp'
+  - 'myapp-agent'
+declarative_access_timers:
+  - 'myapp-maintenance'
+declarative_access_quadlets:
+  # generated-service base names: myapp-web.container -> myapp-web(.service)
+  - 'myapp-web'
+declarative_access_linger: true
+declarative_access_linger_users:
+  # rootless quadlet owners — they manage their units via `systemctl --user`
+  - 'dev1'
+declarative_access_files_modify:
+  # write ACLs on the unit/quadlet files the install created.
+  # DELETE this key (or apply with -e '{"declarative_access_files_modify": []}')
+  # for a read-only-units profile — editing a root-run unit is root-equivalent.
+  - '/etc/containers/systemd/myapp-web.container'
+  - '/etc/systemd/system/myapp-maintenance.service'
+  - '/etc/systemd/system/myapp-maintenance.timer'
+  - '/etc/systemd/system/myapp.service'
+declarative_access_folders_modify:
+  - '/etc/myapp'
+  - '/var/lib/myapp'
+declarative_access_folders_read:
+  - '/var/log/myapp'
+declarative_access_ownership:
+  # enforce the install-time owner/group/mode (file OR folder; recurse optional).
+  # DELETE this key (or apply with -e '{"declarative_access_ownership": []}')
+  # to skip ownership changes — cleanup never reverts chown/chmod.
+  - { path: '/var/lib/myapp', owner: 'myapp', group: 'myapp', mode: '0750' }

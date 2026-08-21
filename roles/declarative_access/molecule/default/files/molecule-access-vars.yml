@@ -1,0 +1,38 @@
+---
+# CROSS-REPO CONTRACT FIXTURE — keep the KEY SET and shape in lockstep with
+# cairn's exporter (src/cairn/accessvars.py, pinned there by
+# tests/test_accessvars.py::test_contract_shape_matches_fixture).
+# This is the exact structure `cairn footprint --access-vars` emits; converge
+# applies it via vars_files and verify asserts every resulting artifact.
+#
+# declarative_access_user / declarative_access_group are intentionally NOT
+# set here — converge passes the entity, exactly as an operator would.
+# linger: true is part of the contract shape; converge overrides it to false
+# because the test containers have no systemd-logind for loginctl.
+declarative_access_profile_name: 'cairn-contract'
+declarative_access_sudo: true
+declarative_access_services:
+  - 'molecule-app'
+declarative_access_timers:
+  - 'molecule-maintenance'
+declarative_access_quadlets:
+  - 'molecule-web'
+# pam_group: cairn emits the install-created service group so the team can be
+# added to it (read/traverse baseline). Reviewers keep it for web servers,
+# drop it for databases.
+declarative_access_pam_group: true
+declarative_access_local_groups:
+  - 'molecule-app'
+declarative_access_linger: true
+declarative_access_linger_users:
+  - 'test_user'
+declarative_access_files_modify:
+  - '/etc/containers/systemd/molecule-web.container'
+  - '/etc/systemd/system/molecule-app.service'
+  - '/etc/systemd/system/molecule-maintenance.timer'
+declarative_access_folders_modify:
+  - '/tmp/molecule-app-etc'
+declarative_access_folders_read:
+  - '/tmp/molecule-app-logs'
+declarative_access_ownership:
+  - { path: '/tmp/molecule-app-state', owner: 'ownership_user', group: 'ownership_group', mode: '0750' }

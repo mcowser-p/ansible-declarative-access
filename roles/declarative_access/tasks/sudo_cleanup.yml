@@ -1,0 +1,20 @@
+---
+- name: sudo cleanup
+  block:
+    ###########################################################################
+    # sudo delete — removes the single per-entity sudoers file, which carries
+    # every grant (services, timers, quadlets, raw commands) for this profile
+    ###########################################################################
+    - name: Remove sudoers file for user
+      ansible.builtin.file:
+        path: "{{ declarative_access_sudoers_path }}{{ ((declarative_access_profile_name + '-') if declarative_access_profile_name is defined else '') + (item | regex_replace('\\.', '-') | lower) }}"
+        state: absent
+      loop: "{{ declarative_access_user if declarative_access_user is iterable and declarative_access_user is not string else [declarative_access_user] }}"
+      when: declarative_access_user | default('') | length > 0
+
+    - name: Remove sudoers file for group
+      ansible.builtin.file:
+        path: "{{ declarative_access_sudoers_path }}{{ ((declarative_access_profile_name + '-') if declarative_access_profile_name is defined else '') + (declarative_access_group | regex_replace('\\.', '-') | lower) }}"
+        state: absent
+      when: declarative_access_group | default('') | length > 0
+  # Runs only when --tags cleanup is applied

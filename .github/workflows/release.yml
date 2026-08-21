@@ -1,0 +1,40 @@
+---
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ansible-core provides ansible-galaxy for the collection build that
+      # @semantic-release/exec runs during prepare (see .releaserc.js).
+      - name: Install ansible-core (collection build)
+        run: pip install -r requirements.txt
+
+      # Pinned in package.json; Dependabot keeps the pins updated.
+      - name: Install semantic-release toolchain
+        run: npm install
+
+      - run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ansible Galaxy publish (disabled): uncomment together with the
+          # publishCmd in .releaserc.js once the GALAXY_API_KEY secret exists
+          # and galaxy.yml carries a Galaxy-accepted OSI license.
+          # GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}

@@ -1,0 +1,121 @@
+---
+- name: Create AD Groups
+  hosts: "{{ target | default('localhost') }}"
+  gather_facts: false
+
+  vars:
+    # Required variables - must be passed at runtime or set in inventory
+    # hostname: "server01"
+    # ad_ou_path: "OU=Groups,OU=Servers,DC=example,DC=com"
+    # server_admins: "Domain Admins"  # Optional - group to add to hostname-admin-full
+
+    # Default domain server (can be overridden at runtime)
+    ad_domain_server: "example.com"
+
+    # Default server admins group (can be overridden at runtime)
+    # server_admins: "Domain Admins"
+
+    # HashiCorp Vault configuration (inherited from group_vars/all.yml)
+    # vault_addr: "https://hashivault.example.com:8200"
+    # # vault_cert_check: "True"
+    # vault_path_ad: "its-ps/data/ansible/ad_admin"
+
+    # Retrieve AD credentials from HashiCorp Vault
+    # vault_secrets_ad: "{{ lookup('community.hashi_vault.hashi_vault', 'secret={{ vault_path_ad }} validate_certs={{ vault_cert_check }} url={{ vault_addr }}') }}"
+    # ad_username: "{{ vault_secrets_ad.username }}"
+    # ad_password: "{{ vault_secrets_ad.password }}"
+
+    # Domain credentials for authentication
+    domain_credentials:
+      - name: credentials
+        username: "{{ ad_username }}"
+        password: "{{ ad_password }}"
+
+    ad_groups:
+      - name: "{{ hostname }}-admin_full"
+        description: "Admin full access group for {{ hostname }}"
+        scope: "Global"
+        category: "Security"
+        ou: "{{ ad_ou_path }}"
+      - name: "{{ hostname }}-app_full"
+        description: "Application full access group for {{ hostname }}"
+        scope: "Global"
+        category: "Security"
+        ou: "{{ ad_ou_path }}"
+      - name: "{{ hostname }}-app_restricted"
+        description: "Application restricted access group for {{ hostname }}"
+        scope: "Global"
+        category: "Security"
+        ou: "{{ ad_ou_path }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - hostname is defined
+          - ad_domain_server is defined
+          - ad_ou_path is defined
+          - vault_addr is defined
+          - vault_cert_check is defined
+        fail_msg: "Required variables 'hostname', 'ad_domain_server', 'ad_ou_path', 'vault_addr', and 'vault_cert_check' must be defined"
+        success_msg: "Required variables are defined"
+
+    - name: Validate HashiCorp Vault credentials retrieved
+      ansible.builtin.assert:
+        that:
+          - ad_username is defined
+          - ad_password is defined
+          - ad_username | length > 0
+          - ad_password | length > 0
+        fail_msg: "Failed to retrieve valid credentials from HashiCorp Vault at {{ vault_path_ad }}"
+        success_msg: "Successfully retrieved credentials from HashiCorp Vault"
+
+    - name: Display configuration
+      ansible.builtin.debug:
+        msg:
+          - "Creating AD groups for hostname: {{ hostname }}"
+          - "Domain server: {{ ad_domain_server }}"
+          - "In OU path: {{ ad_ou_path }}"
+
+    - name: Create AD groups
+      microsoft.ad.group:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        scope: "{{ item.scope }}"
+        category: "{{ item.category }}"
+        path: "{{ item.ou }}"
+        domain_server: "{{ ad_domain_server }}"
+        domain_credentials: "{{ domain_credentials }}"
+        state: present
+      loop: "{{ ad_groups }}"
+
+    - name: Add group membership - app-full as member of app-restricted
+      microsoft.ad.group:
+        name: "{{ hostname }}-app_restricted"
+        members:
+          add:
+            - "{{ hostname }}-app_full"
+        domain_server: "{{ ad_domain_server }}"
+        domain_credentials: "{{ domain_credentials }}"
+        state: present
+
+    - name: Add group membership - server_admins as member of admin-full
+      microsoft.ad.group:
+        name: "{{ hostname }}-admin_full"
+        members:
+          add:
+            - "{{ server_admins }}"
+        domain_server: "{{ ad_domain_server }}"
+        domain_credentials: "{{ domain_credentials }}"
+        state: present
+
+    - name: Display created groups
+      ansible.builtin.debug:
+        msg: "Successfully created AD group: {{ item.name }} in {{ ad_ou_path }}"
+      loop: "{{ ad_groups }}"
+
+    - name: Display group membership
+      ansible.builtin.debug:
+        msg:
+          - "Added {{ hostname }}-app_full as a member of {{ hostname }}-app_restricted"
+          - "Added {{ server_admins }} as a member of {{ hostname }}-admin_full"

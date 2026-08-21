@@ -1,0 +1,18 @@
+---
+# Profile for the real `--tags cleanup` CLI-path test.
+#
+# Converge applies this via vars_files (like every other profile), then
+# verify.yml revokes it by running files/tagcleanup-playbook.yml through a
+# REAL nested `ansible-playbook --tags cleanup` — proving the cleanup/never
+# tag wiring in tasks/main.yml, which include_role + tasks_from cannot reach.
+#
+# sudo + pam_group only, deliberately no file grants: the verify Cleanup
+# play already strips ACLs from the shared fixture paths, so file grants
+# here would race with it.
+declarative_access_profile_name: 'test-tagcleanup'
+declarative_access_sudo: true
+declarative_access_services:
+  - 'httpd'
+declarative_access_pam_group: true
+declarative_access_local_groups:
+  - 'tagcleanup-group'

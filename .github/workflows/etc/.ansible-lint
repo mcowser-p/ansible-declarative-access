@@ -1,0 +1,26 @@
+# .ansible-lint configuration
+# https://ansible-lint.readthedocs.io/en/latest/
+
+# Skip specific rules
+# var-naming[no-role-prefix] is deliberately NOT skipped: every role variable
+# carries the declarative_access_ prefix (Galaxy standard).
+skip_list:
+  - yaml
+  - name[casing]
+  - name[prefix]
+  - role-name
+
+# Exclude paths
+exclude_paths:
+  - .github/workflows/
+  - molecule/
+  - tests/
+  - venv/
+  - .venv/
+  # transient dirs produced by local molecule runs (ANSIBLE_HOME: ../../)
+  - tmp/
+  - roles/declarative_access/tmp/
+  - .ansible/
+
+# Use specific profile
+profile: min

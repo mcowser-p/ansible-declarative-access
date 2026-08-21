@@ -1,0 +1,44 @@
+---
+# Remove PAM group.conf entries for temporary local group membership
+#
+# Removes the group.conf entries that map the specified group/user
+# to local groups. Each entry is removed independently so other
+# application mappings are not affected.
+#
+# Required variables:
+#   - declarative_access_group or declarative_access_user: the entity whose mappings to remove
+#   - declarative_access_local_groups: list of local group names to remove mappings for
+#
+# declarative_access_ad_domain must match the value used at apply time
+# ("" for local principals — the principal then has no @domain suffix).
+
+- name: pam_group cleanup
+  block:
+    - name: pam_group cleanup - Set entity for matching
+      ansible.builtin.set_fact:
+        declarative_access_pam_entity: "{{ '%' + declarative_access_group if declarative_access_group | default('') | length > 0 else (declarative_access_user | default('')) }}"
+
+    - name: pam_group cleanup - Set principal for matching
+      ansible.builtin.set_fact:
+        declarative_access_pam_principal: "{{ declarative_access_pam_entity + ('@' + declarative_access_ad_domain if declarative_access_ad_domain | length > 0 else '') }}"
+
+    - name: pam_group cleanup - Remove group membership entries from group.conf
+      ansible.builtin.lineinfile:
+        path: "{{ declarative_access_group_conf_file }}"
+        # Field-anchored: matches exactly the lines the apply side writes.
+        regexp: "^[^;]*;[^;]*;{{ declarative_access_pam_principal | regex_escape }};[^;]*;{{ item | regex_escape }}$"
+        state: absent
+        backup: true
+      loop: "{{ declarative_access_local_groups }}"
+      when: declarative_access_local_groups is defined and declarative_access_local_groups | length > 0
+
+    - name: pam_group cleanup - Display cleanup result
+      ansible.builtin.debug:
+        msg:
+          - "PAM group cleanup completed:"
+          - "  Principal: {{ declarative_access_pam_principal }}"
+          - "  Removed local group mappings: {{ declarative_access_local_groups | join(', ') }}"
+          - "  Users must log out and back in for changes to take effect"
+      when: declarative_access_debug | default(false) | bool
+
+  # Runs only when --tags cleanup is applied

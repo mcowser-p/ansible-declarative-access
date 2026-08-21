@@ -1,0 +1,239 @@
+---
+# Verify the lifecycle end state, then revoke via the REAL `--tags cleanup`
+# CLI path (this scenario is the only coverage of that path — the default
+# scenario invokes the cleanup task files directly via tasks_from).
+- name: Verify the lifecycle
+  hosts: all
+  become: false
+  gather_facts: false
+
+  vars:
+    lifecycle_profile: "{{ lookup('file', lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') + '/' + inventory_hostname + '-demo-access.yml') | from_yaml }}"
+
+  tasks:
+    ###########################################################################
+    # 1. The generated profile captured what the team installed
+    ###########################################################################
+    - name: "profile: Assert cairn captured the team's units, folders, ownership"
+      ansible.builtin.assert:
+        that:
+          - lifecycle_profile.declarative_access_profile_name == 'demo'
+          - "'demo-maintenance' in lifecycle_profile.declarative_access_services"
+          - "'nginx' in lifecycle_profile.declarative_access_services"
+          - "'demo-maintenance' in lifecycle_profile.declarative_access_timers"
+          - lifecycle_profile.declarative_access_quadlets == ['demo-web']
+          - "'/etc/containers/systemd/demo-web.container' in lifecycle_profile.declarative_access_files_modify"
+          - "'/etc/demo' in lifecycle_profile.declarative_access_folders_modify"
+          - "'/var/lib/demo' in lifecycle_profile.declarative_access_folders_modify"
+          - "'/var/log/demo' in lifecycle_profile.declarative_access_folders_read"
+          - lifecycle_profile.declarative_access_ownership | selectattr('path', 'equalto', '/var/lib/demo') | selectattr('owner', 'equalto', 'nginx') | selectattr('mode', 'equalto', '0750') | list | length == 1
+          # demo-maintenance runs with Group=nginx and the install created the
+          # nginx group -> the exporter emits the pam_group keys
+          - lifecycle_profile.declarative_access_pam_group == true
+          - lifecycle_profile.declarative_access_local_groups == ['nginx']
+          - "'declarative_access_user' not in lifecycle_profile"
+          - "'declarative_access_group' not in lifecycle_profile"
+        fail_msg: "profile FAILED: generated profile missing expected content"
+        success_msg: "profile OK: generated profile captured the install"
+
+    ###########################################################################
+    # 2. The restricted user's sudo surface is scoped to their units
+    ###########################################################################
+    - name: "sudo: List dev1's grants"
+      ansible.builtin.command: sudo -l -U dev1
+      register: lifecycle_sudo_list
+      changed_when: false
+
+    - name: "sudo: Assert scoped grants present and foreign grants absent"
+      ansible.builtin.assert:
+        that:
+          - "'systemctl restart nginx' in lifecycle_sudo_list.stdout"
+          - "'systemctl restart demo-maintenance.timer' in lifecycle_sudo_list.stdout"
+          - "'systemctl start demo-web' in lifecycle_sudo_list.stdout"
+          - "'systemctl daemon-reload' in lifecycle_sudo_list.stdout"
+          - "'systemctl enable demo-web' not in lifecycle_sudo_list.stdout"
+          - "'sshd' not in lifecycle_sudo_list.stdout"
+          - "'(ALL) ALL' not in lifecycle_sudo_list.stdout"
+        fail_msg: "sudo FAILED: dev1's grant surface is wrong"
+        success_msg: "sudo OK: dev1 scoped to their own units"
+
+    ###########################################################################
+    # 3. Real-behavior checks as the restricted user
+    ###########################################################################
+    - name: "allow: Operations the team should be able to do"
+      ansible.builtin.command: su - dev1 -c "{{ item }}"
+      register: lifecycle_allowed
+      changed_when: false
+      failed_when: lifecycle_allowed.rc != 0
+      loop:
+        - "sudo systemctl restart nginx"
+        - "sudo systemctl restart demo-maintenance.timer"
+        - "sudo systemctl stop demo-web.service"
+        - "sudo journalctl -u demo-maintenance.service"
+        - "echo '# team edit' >> /etc/systemd/system/demo-maintenance.timer"
+        - "ls /var/log/demo"
+
+    - name: "deny: Operations the team must NOT be able to do"
+      ansible.builtin.command: su - dev1 -c "{{ item }}"
+      register: lifecycle_denied
+      changed_when: false
+      failed_when: lifecycle_denied.rc == 0
+      loop:
+        - "sudo systemctl restart sshd"
+        - "sudo systemctl enable demo-web.service"
+        - "sudo cat /etc/shadow"
+        - "sh -c 'echo x >> /etc/passwd'"
+
+    ###########################################################################
+    # 4. pam_group through the RAW generated profile — content + behavior
+    #
+    # The apply wrote the AD-shaped line (default domain). For the behavioral
+    # proof without AD, apply once more with ad_domain "" so the principal is
+    # the LOCAL sim group, then actually log in: pam_group must place dev1
+    # into nginx for the ssh session only.
+    ###########################################################################
+    - name: "pam: Read group.conf after apply"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: lifecycle_group_conf
+
+    - name: "pam: Assert the generated profile wired the AD-shaped mapping"
+      ansible.builtin.assert:
+        that:
+          - "'sshd;!tty*;%app-restricted-sim@example.com;Al0000-2400;nginx' in (lifecycle_group_conf.content | b64decode)"
+        fail_msg: "pam FAILED: group.conf mapping missing after applying the generated profile"
+        success_msg: "pam OK: %app-restricted-sim@example.com -> nginx mapped in group.conf"
+
+    - name: "pam: Assert pam_group.so wired into sshd"
+      ansible.builtin.command: grep -E "^auth.*pam_group\.so" /etc/pam.d/sshd
+      changed_when: false
+
+    - name: "pam: Re-apply with an empty ad_domain (local sim group principal)"
+      ansible.builtin.command: >-
+        ansible-playbook -i localhost, -c local
+        /opt/linux-access/playbooks/5_apply_access_profile.yml
+        -e @/root/demo-access.yml
+        -e group_name=app-restricted-sim
+        -e declarative_access_sudo_nopasswd=true
+        -e declarative_access_ad_domain=
+      environment:
+        ANSIBLE_ROLES_PATH: /opt/linux-access/roles
+      register: lifecycle_apply_local
+      changed_when: true
+
+    - name: "pam: Behavioral — ssh as dev1, pam_group adds nginx for the session"
+      ansible.builtin.command: >-
+        ssh -i /root/.ssh/id_ed25519
+        -o BatchMode=yes -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5
+        dev1@127.0.0.1 id
+      register: lifecycle_ssh_id
+      changed_when: false
+      retries: 5
+      delay: 2
+      until: lifecycle_ssh_id.rc == 0
+
+    - name: "pam: Control — su session does NOT carry nginx"
+      ansible.builtin.command: su - dev1 -c id
+      register: lifecycle_su_id
+      changed_when: false
+
+    - name: "pam: Assert session-scoped nginx membership over ssh only"
+      ansible.builtin.assert:
+        that:
+          - "'nginx' in lifecycle_ssh_id.stdout"
+          - "'app-restricted-sim' in lifecycle_ssh_id.stdout"
+          - "'nginx' not in lifecycle_su_id.stdout"
+        fail_msg: >-
+          pam FAILED: ssh id = {{ lifecycle_ssh_id.stdout }} /
+          su id = {{ lifecycle_su_id.stdout }}
+        success_msg: "pam OK: dev1 lands in nginx during ssh sessions only — full cairn->profile->pam_group chain proven"
+
+    ###########################################################################
+    # 5. Revoke via the REAL CLI path: --tags cleanup
+    #    (--skip-tags login: the sim host has no realmd; real hosts do)
+    #    Two runs: the AD-shaped line (default domain) and the local line
+    #    (ad_domain "") were both applied above and must both go.
+    ###########################################################################
+    - name: "revoke: Run the apply playbook with --tags cleanup"
+      ansible.builtin.command: >-
+        ansible-playbook -i localhost, -c local
+        /opt/linux-access/playbooks/5_apply_access_profile.yml
+        -e @/root/demo-access.yml
+        -e group_name=app-restricted-sim
+        --tags cleanup --skip-tags login
+      environment:
+        ANSIBLE_ROLES_PATH: /opt/linux-access/roles
+      register: lifecycle_revoke
+      changed_when: true
+
+    - name: "revoke: Run the cleanup again for the local-principal mapping"
+      ansible.builtin.command: >-
+        ansible-playbook -i localhost, -c local
+        /opt/linux-access/playbooks/5_apply_access_profile.yml
+        -e @/root/demo-access.yml
+        -e group_name=app-restricted-sim
+        -e declarative_access_ad_domain=
+        --tags cleanup --skip-tags login
+      environment:
+        ANSIBLE_ROLES_PATH: /opt/linux-access/roles
+      register: lifecycle_revoke_local
+      changed_when: true
+
+    - name: "revoke: Stat the sudoers file"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/demo-app-restricted-sim
+      register: lifecycle_sudoers_file
+
+    - name: "revoke: List dev1's grants after cleanup"
+      ansible.builtin.command: sudo -l -U dev1
+      register: lifecycle_sudo_after
+      changed_when: false
+
+    - name: "revoke: Check folder ACLs after cleanup"
+      ansible.builtin.command: getfacl /var/lib/demo
+      register: lifecycle_acl_after
+      changed_when: false
+
+    - name: "revoke: Read group.conf after cleanup"
+      ansible.builtin.slurp:
+        src: /etc/security/group.conf
+      register: lifecycle_group_conf_after
+
+    - name: "revoke: Assert the grant surface is gone"
+      ansible.builtin.assert:
+        that:
+          - not lifecycle_sudoers_file.stat.exists
+          - "'systemctl' not in lifecycle_sudo_after.stdout"
+          - "'app-restricted-sim' not in lifecycle_acl_after.stdout"
+          - "'app-restricted-sim' not in (lifecycle_group_conf_after.content | b64decode)"
+        fail_msg: "revoke FAILED: grants survived --tags cleanup"
+        success_msg: "revoke OK: sudoers file, ACLs and pam_group mappings fully revoked"
+
+    - name: "revoke: Behavioral — fresh ssh session no longer carries nginx"
+      ansible.builtin.command: >-
+        ssh -i /root/.ssh/id_ed25519
+        -o BatchMode=yes -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5
+        dev1@127.0.0.1 id
+      register: lifecycle_ssh_revoked
+      changed_when: false
+      retries: 5
+      delay: 2
+      until: lifecycle_ssh_revoked.rc == 0
+
+    - name: "revoke: Assert behavioral pam_group revocation"
+      ansible.builtin.assert:
+        that:
+          - "'nginx' not in lifecycle_ssh_revoked.stdout"
+        fail_msg: "revoke FAILED: dev1 still lands in nginx after cleanup: {{ lifecycle_ssh_revoked.stdout }}"
+        success_msg: "revoke OK: ssh session no longer carries nginx"
+
+    - name: "revoke: Previously allowed operations are now denied"
+      ansible.builtin.command: su - dev1 -c "{{ item }}"
+      register: lifecycle_denied_after
+      changed_when: false
+      failed_when: lifecycle_denied_after.rc == 0
+      loop:
+        - "sudo systemctl restart nginx"
+        - "sh -c 'echo x >> /etc/systemd/system/demo-maintenance.timer'"

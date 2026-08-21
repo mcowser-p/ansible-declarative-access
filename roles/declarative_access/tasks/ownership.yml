@@ -1,0 +1,30 @@
+---
+# Set standard Unix ownership (user and group owner) and permissions (mode)
+# on files and directories. Complementary to ACLs — use this for base Unix
+# ownership; use the ACL lists for additive per-entity grants.
+#
+# Usage:
+#   declarative_access_ownership:
+#     - path: /etc/nginx/conf.d          # file OR folder
+#       owner: root
+#       group: nginx
+#       mode: "0755"
+#       recurse: true
+#     - path: /var/log/myapp/app.log
+#       owner: appuser
+#       group: appgroup
+#       mode: "0640"
+#
+# owner/group/mode are optional — omitted keys leave that attribute
+# unchanged; recurse defaults to false.
+
+- name: Set file/directory ownership and permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ item.owner | default(omit) }}"
+    group: "{{ item.group | default(omit) }}"
+    mode: "{{ item.mode | default(omit) }}"
+    recurse: "{{ item.recurse | default(false) }}"
+  loop: "{{ declarative_access_ownership }}"
+  loop_control:
+    label: "{{ item.path }}"

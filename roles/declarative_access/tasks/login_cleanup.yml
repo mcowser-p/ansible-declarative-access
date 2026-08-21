@@ -1,0 +1,21 @@
+---
+- name: login cleanup
+  tags:
+    - login
+  block:
+    ###########################################################################
+    # login delete
+    ###########################################################################
+    - name: user - remove login access
+      ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --withdraw --verbose {{ item }}"
+      changed_when: false
+      loop: "{{ declarative_access_user if declarative_access_user is iterable and declarative_access_user is not string else [declarative_access_user] }}"
+      when: declarative_access_user | default('') | length > 0
+
+    - name: group - remove login access
+      ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --withdraw --verbose --groups {{ item }}"
+      changed_when: false
+      loop: "{{ declarative_access_group if declarative_access_group is iterable and declarative_access_group is not string else [declarative_access_group] }}"
+      when: declarative_access_group | default('') | length > 0
+
+  # Runs only when --tags cleanup is applied

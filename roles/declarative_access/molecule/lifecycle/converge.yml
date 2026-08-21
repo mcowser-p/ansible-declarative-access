@@ -1,0 +1,149 @@
+---
+# Converge = the lifecycle itself: handover snapshot -> team installs the
+# app -> capture footprint + profile -> apply the RAW generated profile ->
+# flip the user to the restricted group.
+- name: Run the application-deployment lifecycle
+  hosts: all
+  become: false
+  gather_facts: false
+
+  tasks:
+    ###########################################################################
+    # Phase 2 — handover snapshot (before the team gets access)
+    ###########################################################################
+    - name: Capture the handover baseline
+      ansible.builtin.command: cairn files init --config /etc/cairn/footprint.yaml
+      args:
+        creates: /var/lib/cairn/clean-baseline.db
+
+    ###########################################################################
+    # Phase 3 — setup window: the team installs their application
+    ###########################################################################
+    - name: Team installs nginx
+      ansible.builtin.package:
+        name: nginx
+        state: present
+
+    - name: Team installs their maintenance service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/demo-maintenance.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Demo maintenance
+          [Service]
+          Type=oneshot
+          User=nginx
+          Group=nginx
+          ExecStart=/usr/bin/logger demo-maintenance ran
+          LogsDirectory=demo
+
+    - name: Team installs their maintenance timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/demo-maintenance.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Demo nightly maintenance
+          [Timer]
+          OnCalendar=daily
+          Persistent=true
+          [Install]
+          WantedBy=timers.target
+
+    - name: Team creates the quadlet directory
+      ansible.builtin.file:
+        path: /etc/containers/systemd
+        state: directory
+        mode: '0755'
+
+    - name: Team installs their quadlet
+      ansible.builtin.copy:
+        dest: /etc/containers/systemd/demo-web.container
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Demo web container
+          [Container]
+          Image=docker.io/library/nginx:alpine
+          PublishPort=8081:80
+          Volume=/var/lib/demo:/data:Z
+          EnvironmentFile=/etc/demo/web.env
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Team creates config and state directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default(omit) }}"
+        group: "{{ item.group | default(omit) }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /etc/demo, mode: '0755' }
+        - { path: /var/lib/demo, owner: nginx, group: nginx, mode: '0750' }
+
+    - name: Team writes their env file
+      ansible.builtin.copy:
+        dest: /etc/demo/web.env
+        content: "WEB_PORT=8081\n"
+        mode: '0644'
+
+    - name: Reload systemd so the quadlet generator runs
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable the timer and nginx
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+      loop:
+        - nginx.service
+        - demo-maintenance.timer
+
+    - name: Run the maintenance service once (LogsDirectory dirs exist only after first start)
+      ansible.builtin.systemd:
+        name: demo-maintenance.service
+        state: started
+
+    ###########################################################################
+    # Phase 4 — capture footprint + generated access profile
+    ###########################################################################
+    - name: Capture the footprint and access profile
+      ansible.builtin.command: >-
+        cairn footprint --config /etc/cairn/footprint.yaml --app demo
+        --report /root/footprint-demo.json --access-vars /root/demo-access.yml
+      register: lifecycle_footprint
+      changed_when: true
+      failed_when: lifecycle_footprint.rc not in [0, 1]
+
+    - name: Fetch the generated profile for verification (per host)
+      ansible.builtin.fetch:
+        src: /root/demo-access.yml
+        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/{{ inventory_hostname }}-demo-access.yml"
+        flat: true
+
+    ###########################################################################
+    # Phase 5 — apply the RAW generated profile (no hand edits: this proves
+    # the exporter output is directly appliable) to the restricted group
+    ###########################################################################
+    - name: Apply the generated profile via the real apply playbook
+      ansible.builtin.command: >-
+        ansible-playbook -i localhost, -c local
+        /opt/linux-access/playbooks/5_apply_access_profile.yml
+        -e @/root/demo-access.yml
+        -e group_name=app-restricted-sim
+        -e declarative_access_sudo_nopasswd=true
+      environment:
+        ANSIBLE_ROLES_PATH: /opt/linux-access/roles
+      register: lifecycle_apply
+      changed_when: true
+
+    ###########################################################################
+    # Phase 6 — the flip: setup admin -> restricted admin
+    ###########################################################################
+    - name: Flip dev1 out of the setup groups into the restricted group
+      ansible.builtin.user:
+        name: dev1
+        groups: app-restricted-sim
+        append: false

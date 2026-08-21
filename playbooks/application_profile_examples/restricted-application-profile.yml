@@ -1,0 +1,59 @@
+---
+# Restricted Application Profile
+#
+# Grants an AD group sudo access for a specific application service
+# and modify access to the application directory.
+#
+# Domain Group Naming Standard:
+#   {hostname}-app_restricted  -> default group for application profiles
+#   {hostname}-app_full        -> inherits app-restricted via AD group nesting
+#
+# SIMPLE USAGE EXAMPLE (uses default app-restricted group):
+# ansible-playbook -i inventory playbooks/application_profile_examples/restricted-application-profile.yml \
+#   -e "app_name=myapp"
+#
+# USAGE WITH CUSTOM HOSTNAME:
+# ansible-playbook -i inventory playbooks/application_profile_examples/restricted-application-profile.yml \
+#   -e "app_name=myapp" -e "hostname=server01"
+
+- name: Grant restricted admin access for application management
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  vars:
+    # Required variables - set these when running the playbook
+    app_name: "{{ app_name }}"
+    hostname: "{{ hostname | default(ansible_hostname) }}"
+    radmin_group: "{{ hostname | lower }}-app_restricted"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable 'app_name' is not defined"
+      when: app_name is not defined
+
+    - name: Configure restricted admin access for app service and directory using declarative_access role
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ radmin_group }}"
+        declarative_access_sudo: true
+        declarative_access_sudo_nopasswd: false
+        declarative_access_profile_name: "{{ app_name }}-restricted"
+        declarative_access_services:
+          - "{{ app_name }}"
+        declarative_access_folders_modify:
+          - "/opt/{{ app_name }}"
+      tags:
+        - sudo
+        - setfacl
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "Restricted admin access configured for:"
+          - "  Group: {{ radmin_group }}"
+          - "  Application: {{ app_name }}"
+          - "  Service management: systemctl commands for {{ app_name }}.service"
+          - "  Directory access: /opt/{{ app_name }} (read/write/execute)"
+          - "  Sudoers file: /etc/sudoers.d/{{ app_name }}-restricted-{{ radmin_group | regex_replace('\\.', '-') | lower }}"
+          - "  ACL configured on: /opt/{{ app_name }}"

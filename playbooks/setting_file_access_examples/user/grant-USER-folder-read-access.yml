@@ -1,0 +1,36 @@
+---
+# SIMPLE USAGE EXAMPLE:
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/user/grant-USER-folder-read-access.yml -e "user_name=jdoe" -e "read_folder=/var/log/httpd"
+
+- name: Grant ACL read access to specified folder for user
+  hosts: "{{ target_hosts | default('all') }}"
+  become: true
+  vars:
+    # Required variables - set these when running the playbook
+    ad_user_name: "{{ user_name }}"
+    folder_path: "{{ read_folder }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable '{{ item }}' is not defined"
+      when: vars[item] is not defined
+      loop:
+        - user_name
+        - read_folder
+
+    - name: Configure folder read access using declarative_access role (ACL only)
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: "{{ ad_user_name }}"
+        declarative_access_folders_read:
+          - "{{ folder_path }}"
+      tags: setfacl
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "ACL read access configured for AD user: {{ ad_user_name }}"
+          - "Read access granted to: {{ folder_path }}"
+          - "Permissions set: rX (read + execute for directories)"

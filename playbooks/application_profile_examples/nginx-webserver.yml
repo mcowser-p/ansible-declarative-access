@@ -1,0 +1,95 @@
+---
+# Nginx Web Server Application Profile
+#
+# Domain Group Naming Standard:
+#   {hostname}-app_restricted  -> default group for application profiles
+#   {hostname}-app_full        -> inherits app-restricted via AD group nesting
+#
+# SIMPLE USAGE EXAMPLE (uses default app-restricted group):
+# ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webserver.yml
+#
+# USAGE WITH CUSTOM GROUP:
+# ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webserver.yml \
+#   -e "group_name=ps-webadmins"
+#
+# CLEANUP (removes all access configured by this profile):
+# ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webserver.yml \
+#   --tags cleanup
+
+- name: Grant Nginx web server administration access
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  vars:
+    # Use group_name OR user_name, not both
+    # Default: Uses {hostname}-app_restricted group
+    group_name: "{{ group_name | default('') }}"
+    user_name: "{{ user_name | default('') }}"
+
+
+    # Determine the default group based on hostname
+    default_group: "{{ ansible_hostname | lower }}-app_restricted"
+
+  tasks:
+    - name: Setup Nginx web server administration access
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ group_name if group_name else ('' if user_name else default_group) }}"
+        declarative_access_user: "{{ user_name if user_name else '' }}"
+        declarative_access_login: true
+        declarative_access_sudo: true
+        declarative_access_sudo_nopasswd: false
+
+        declarative_access_profile_name: "nginx-webserver"
+
+        # Nginx service management
+        declarative_access_services:
+          - "nginx"
+
+        # Commands for nginx management
+        declarative_access_commands:
+          - "/usr/sbin/nginx"
+
+        # Configuration directories (modify access)
+        declarative_access_folders_modify:
+          - "/etc/nginx/"
+          - "/etc/nginx/conf.d/"
+          - "/etc/nginx/sites-available/"
+          - "/etc/nginx/sites-enabled/"
+          - "/usr/share/nginx/html/"
+          - "/var/www/html/"
+
+        # Log directories (read-only access)
+        declarative_access_folders_read:
+          - "/var/log/nginx/"
+
+        declarative_access_files_read: []
+        declarative_access_files_modify: []
+        declarative_access_files_exec: []
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "Nginx web server administration access configured:"
+          - "  Group: {{ group_name if group_name else (user_name if user_name else default_group) }}"
+          - "  Profile: nginx-webserver"
+          - ""
+          - "Service Management:"
+          - "  - nginx (start, stop, restart, reload, status)"
+          - ""
+          - "Commands:"
+          - "  - /usr/sbin/nginx (nginx binary for config testing)"
+          - ""
+          - "Directory Access (Modify):"
+          - "  - /etc/nginx/ (main nginx configuration)"
+          - "  - /etc/nginx/conf.d/ (additional config files)"
+          - "  - /etc/nginx/sites-available/ (available site configs)"
+          - "  - /etc/nginx/sites-enabled/ (enabled site configs)"
+          - "  - /usr/share/nginx/html/ (default web root)"
+          - "  - /var/www/html/ (common web root)"
+          - ""
+          - "Directory Access (Read):"
+          - "  - /var/log/nginx/ (nginx access and error logs)"
+          - ""
+          - "Sudoers file: /etc/sudoers.d/nginx-webserver-{{ (group_name if group_name else (user_name if user_name else default_group)) | regex_replace('\\.', '-') | lower }}"
+          - "To remove access: ansible-playbook ... --tags cleanup"

@@ -1,0 +1,42 @@
+---
+# Grant full sudo access to admin-full and app-full AD groups
+#
+# Domain Group Naming Standard:
+#   {hostname}-admin_full   -> full system admin, mapped to wheel
+#   {hostname}-app_full     -> application admin, mapped to wheel
+#
+# SIMPLE USAGE EXAMPLE:
+# ansible-playbook -i inventory playbooks/application_profile_examples/DEFAULT-full-access.yml
+#
+# USAGE WITH CUSTOM APPLICATION PROFILE NAME:
+# ansible-playbook -i inventory playbooks/application_profile_examples/DEFAULT-full-access.yml \
+#   -e "application_profile_name=my-app"
+
+- name: Grant full sudo access to admin groups
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  vars:
+    application_profile_name: "DEFAULT_FULL"
+    admin_groups:
+      - "{{ ansible_hostname | lower }}-admin_full"
+      - "{{ ansible_hostname | lower }}-app_full"
+
+  tasks:
+    - name: Configure full sudo access for admin groups using declarative_access role
+      ansible.builtin.include_role:
+        name: declarative_access
+      vars:
+        declarative_access_group: "{{ item }}"
+        declarative_access_sudo: true
+        declarative_access_sudo_nopasswd: false
+        declarative_access_profile_name: "{{ application_profile_name | default(omit) }}"
+      loop: "{{ admin_groups }}"
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "Full sudo access configured for the following AD groups:"
+          - "{{ admin_groups | map('regex_replace', '^(.*)$', '  - \\1') | list }}"
+          - "Access level: ALL commands with password required"
+          - "Sudoers files created in: /etc/sudoers.d/"
+          - "{% if application_profile_name is defined %}Custom profile naming: {{ application_profile_name }}-<group_name>{% else %}Default naming: <group_name>{% endif %}"

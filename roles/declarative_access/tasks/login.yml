@@ -1,0 +1,26 @@
+---
+# tasks file for declarative_access
+
+- name: login
+  tags:
+    - login
+  block:
+    ######################################
+    # Login - User
+    ######################################
+    - name: user - allow login access
+      ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --verbose {{ item }}"
+      changed_when: false
+      loop: "{{ declarative_access_user if declarative_access_user is iterable and declarative_access_user is not string else [declarative_access_user] }}"
+      when: declarative_access_user | default('') | length > 0
+
+    ######################################
+    # Login - Group
+    ######################################
+    - name: group - allow login access
+      ansible.builtin.command: /bin/bash -c "/usr/sbin/realm permit --verbose --groups {{ item }}"
+      changed_when: false
+      loop: "{{ declarative_access_group if declarative_access_group is iterable and declarative_access_group is not string else [declarative_access_group] }}"
+      when: declarative_access_group | default('') | length > 0
+
+  when: declarative_access_login | default(false) | bool

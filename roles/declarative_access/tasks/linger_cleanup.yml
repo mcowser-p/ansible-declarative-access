@@ -1,0 +1,20 @@
+---
+# Disable systemd lingering for the listed users.
+#
+# CAUTION: lingering is per-user, not per-profile. Disabling it stops ALL of
+# that user's rootless services once their sessions end — including services
+# granted by other profiles. Only include users whose rootless workloads are
+# fully retired.
+
+- name: linger cleanup
+  tags:
+    - linger
+  block:
+    - name: linger cleanup - Disable lingering for each user
+      ansible.builtin.command:
+        cmd: loginctl disable-linger {{ item }}
+        removes: /var/lib/systemd/linger/{{ item }}
+      loop: "{{ declarative_access_linger_users }}"
+
+  when: declarative_access_linger_users | default([]) | length > 0
+  # Runs only when --tags cleanup is applied

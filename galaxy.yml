@@ -1,0 +1,59 @@
+---
+# Ansible Galaxy collection manifest for mcowser_p.linux_access.
+#
+# `version` is a placeholder — semantic-release stamps the released version
+# here at release time (see .releaserc.js) before building the collection
+# artifact. Do not bump it by hand.
+#
+# Licensed under Apache-2.0 (see LICENSE) — accepted by public
+# galaxy.ansible.com.
+namespace: mcowser_p
+name: linux_access
+version: 0.0.0
+readme: README.md
+authors:
+  - mcowser-p
+description: >-
+  Declarative Linux access management — scoped sudoers grants for systemd
+  services, timers, and podman quadlets; POSIX ACLs on files and folders;
+  ownership enforcement; PAM group mapping; realm login; and lingering for
+  rootless services. Profiles can be generated from install footprints by
+  cairn (`cairn footprint --access-vars`).
+license:
+  - Apache-2.0
+tags:
+  - linux
+  - security
+  - acl
+  - sudoers
+  - systemd
+  - quadlet
+  - infrastructure
+dependencies:
+  # Runtime deps of the declarative_access role. community.docker is
+  # molecule-only and deliberately NOT a runtime dependency (requirements.yml
+  # still installs it for development/CI).
+  community.general: '>=6.0.0'
+  ansible.posix: '>=1.5.0'
+  microsoft.ad: '>=1.0.0'
+repository: https://github.com/mcowser-p/ansible-declarative-access
+homepage: https://github.com/mcowser-p/ansible-declarative-access
+issues: https://github.com/mcowser-p/ansible-declarative-access/issues
+build_ignore:
+  - .github
+  - .claude
+  - .git
+  - .gitignore
+  - .pre-commit-config.yaml
+  - .releaserc.js
+  - .ansible-lint
+  - .yamllint
+  - .editorconfig
+  - scripts
+  - package.json
+  - package-lock.json
+  - node_modules
+  - requirements.txt
+  - roles/declarative_access/molecule
+  - roles/declarative_access/tests
+  - '*.tar.gz'

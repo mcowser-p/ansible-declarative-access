@@ -1,0 +1,36 @@
+---
+# SIMPLE USAGE EXAMPLE:
+# ansible-playbook -i inventory playbooks/setting_file_access_examples/user/grant-USER-file-modify-access.yml -e "user_name=jdoe" -e "modify_file=/etc/httpd/conf.d/custom.conf"
+
+- name: Grant ACL modify access to specified file for user
+  hosts: "{{ target_hosts | default('all') }}"
+  become: true
+  vars:
+    # Required variables - set these when running the playbook
+    ad_user_name: "{{ user_name }}"
+    file_path: "{{ modify_file }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.fail:
+        msg: "Required variable '{{ item }}' is not defined"
+      when: vars[item] is not defined
+      loop:
+        - user_name
+        - modify_file
+
+    - name: Configure file modify access using declarative_access role (ACL only)
+      ansible.builtin.import_role:
+        name: declarative_access
+      vars:
+        declarative_access_user: "{{ ad_user_name }}"
+        declarative_access_files_modify:
+          - "{{ file_path }}"
+      tags: setfacl
+
+    - name: Display access summary
+      ansible.builtin.debug:
+        msg:
+          - "ACL modify access configured for AD user: {{ ad_user_name }}"
+          - "Modify access granted to file: {{ file_path }}"
+          - "Permissions set: rw (read + write)"

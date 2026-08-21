@@ -1,0 +1,245 @@
+---
+# Configure PAM group.conf for temporary local group membership
+#
+# This playbook configures /etc/security/group.conf to use pam_group.so
+# to temporarily add AD group members to local groups (e.g., httpd) when
+# packages like dnf create application-specific groups.
+#
+# SIMPLE USAGE EXAMPLE:
+# ansible-playbook -i inventory playbooks/configure_pam_group.yml -e "local_group=httpd"
+#
+# USAGE WITH CUSTOM AD GROUP:
+# ansible-playbook -i inventory playbooks/configure_pam_group.yml \
+#   -e "local_group=httpd" \
+#   -e "ad_group_name=ps-webadmins"
+#
+# USAGE WITH MULTIPLE LOCAL GROUPS:
+# ansible-playbook -i inventory playbooks/configure_pam_group.yml \
+#   -e "local_groups=['httpd','nginx','apache']"
+#
+# USAGE WITH CLEANUP:
+# ansible-playbook -i inventory playbooks/configure_pam_group.yml \
+#   -e "local_group=httpd" \
+#   -e "cleanup=true"
+
+- name: Configure PAM group.conf for temporary local group membership
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  become: true
+
+  vars:
+    # PAM group.conf file location
+    group_conf_file: "/etc/security/group.conf"
+
+    # PAM configuration file to enable pam_group.so
+    pam_sshd_file: "/etc/pam.d/sshd"
+
+    # AD domain suffix for the group.conf principal (override with -e)
+    ad_domain: "example.com"
+
+  tasks:
+    - name: Set default variables
+      ansible.builtin.set_fact:
+        _local_group: "{{ local_group | default('') }}"
+        _local_groups: "{{ local_groups | default([]) }}"
+        _ad_group_name: "{{ ad_group_name | default((ansible_hostname | lower) + '-app_restricted') }}"
+        _cleanup: "{{ cleanup | default(false) | bool }}"
+
+    - name: Determine groups to configure
+      ansible.builtin.set_fact:
+        groups_to_configure: "{{ [_local_group] if _local_group else _local_groups }}"
+
+    - name: Validate input parameters
+      ansible.builtin.assert:
+        that:
+          - (_local_group | length > 0) or (_local_groups | length > 0)
+        fail_msg: "Error: You must specify either 'local_group' or 'local_groups' parameter."
+        success_msg: "Valid input parameters provided."
+      when: not _cleanup
+
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "PAM Group Configuration:"
+          - "  AD Group: {{ _ad_group_name }}"
+          - "  Local Groups: {{ groups_to_configure | join(', ') }}"
+          - "  Cleanup Mode: {{ _cleanup }}"
+      when: not _cleanup
+
+    ###########################################################################
+    # Cleanup Mode
+    ###########################################################################
+    - name: Remove PAM group configurations
+      when: _cleanup
+      block:
+        - name: Remove entries from group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            # Field-anchored + escaped, matching what configuration mode writes
+            regexp: "^[^;]*;[^;]*;%{{ _ad_group_name | regex_escape }}@{{ ad_domain | regex_escape }};[^;]*;{{ item | regex_escape }}$"
+            state: absent
+            backup: true
+          loop: "{{ groups_to_configure }}"
+          when: groups_to_configure | length > 0
+          notify: Restart sshd
+
+        - name: Display cleanup summary
+          ansible.builtin.debug:
+            msg:
+              - "Cleanup completed for:"
+              - "  AD Group: %{{ _ad_group_name }}@{{ ad_domain }}"
+              - "  Local Groups: {{ groups_to_configure | join(', ') }}"
+              - "  Configuration file backed up"
+              - "  SSHD will be restarted for changes to take effect"
+
+    ###########################################################################
+    # Configuration Mode
+    ###########################################################################
+    - name: Configure PAM group membership
+      when: not _cleanup
+      block:
+        - name: Check if AD group exists
+          ansible.builtin.getent:
+            database: group
+            key: "{{ _ad_group_name }}@{{ ad_domain }}"
+            fail_key: false
+          register: ad_group_check
+
+        - name: Fail if AD group does not exist
+          ansible.builtin.fail:
+            msg: |
+              ERROR: AD group '{{ _ad_group_name }}@{{ ad_domain }}' does not exist!
+
+              The AD group must exist in Active Directory before configuring PAM group membership.
+
+              Expected AD group: {{ _ad_group_name }}@{{ ad_domain }}
+
+              Please create this group in Active Directory first, or specify a different AD group using:
+                -e "ad_group_name=your.custom.group"
+
+              After creating the group in AD, re-run this playbook.
+          when: ad_group_check.ansible_facts.getent_group is not defined or ad_group_check.ansible_facts.getent_group[_ad_group_name + '@' + ad_domain] is none
+
+        - name: Display AD group verification success
+          ansible.builtin.debug:
+            msg: "✓ Verified AD group exists: {{ _ad_group_name }}@{{ ad_domain }}"
+
+        - name: Ensure /etc/security directory exists
+          ansible.builtin.file:
+            path: /etc/security
+            state: directory
+            mode: '0755'
+            owner: root
+            group: root
+
+        - name: Ensure group.conf exists
+          ansible.builtin.file:
+            path: "{{ group_conf_file }}"
+            state: touch
+            mode: '0644'
+            owner: root
+            group: root
+            modification_time: preserve
+            access_time: preserve
+
+        - name: Add header comment to group.conf if empty
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            line: "# /etc/security/group.conf - PAM group membership configuration"
+            insertbefore: BOF
+            create: true
+
+        - name: Add format comment to group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            line: "# Format: services;ttys;users;times;groups"
+            insertafter: "^# /etc/security/group.conf"
+            create: true
+
+        - name: Check if local groups exist
+          ansible.builtin.getent:
+            database: group
+            key: "{{ item }}"
+            fail_key: false
+          loop: "{{ groups_to_configure }}"
+          register: local_group_check
+
+        - name: Fail if local group does not exist
+          ansible.builtin.fail:
+            msg: |
+              ERROR: Local group '{{ item.item }}' does not exist!
+
+              The PAM group configuration requires the local group to exist before mapping AD users to it.
+
+              Please create the group first using one of these methods:
+                1. Install the package that creates the group (e.g., httpd, nginx, apache)
+                2. Use ansible group module in a separate task
+
+              After creating the group, re-run this playbook.
+          loop: "{{ local_group_check.results }}"
+          when: item.ansible_facts.getent_group is not defined or item.ansible_facts.getent_group[item.item] is none
+          loop_control:
+            label: "{{ item.item }}"
+
+        - name: Add group membership entries to group.conf
+          ansible.builtin.lineinfile:
+            path: "{{ group_conf_file }}"
+            line: "sshd;!tty*;%{{ _ad_group_name }}@{{ ad_domain }};Al0000-2400;{{ item }}"
+            # Field-anchored so group 'dev' never matches 'dev2''s line
+            regexp: "^[^;]*;[^;]*;%{{ _ad_group_name | regex_escape }}@{{ ad_domain | regex_escape }};[^;]*;{{ item | regex_escape }}$"
+            state: present
+            backup: true
+            create: true
+          loop: "{{ groups_to_configure }}"
+
+        - name: Check if pam_group.so is already in sshd PAM config
+          ansible.builtin.shell: |
+            grep -E "^auth.*pam_group\.so" {{ pam_sshd_file }} || true
+          register: pam_group_check
+          changed_when: false
+
+        - name: Add pam_group.so to sshd PAM configuration
+          ansible.builtin.lineinfile:
+            path: "{{ pam_sshd_file }}"
+            line: "auth       required     pam_group.so"
+            insertafter: "^auth"
+            state: present
+            backup: true
+          when: pam_group_check.stdout | length == 0
+          notify: Restart sshd
+
+        - name: Verify group.conf configuration
+          ansible.builtin.command: "cat {{ group_conf_file }}"
+          register: group_conf_content
+          changed_when: false
+
+        - name: Display configuration result
+          ansible.builtin.debug:
+            msg:
+              - "PAM group configuration completed successfully!"
+              - ""
+              - "Configuration details:"
+              - "  AD Group: %{{ _ad_group_name }}@{{ ad_domain }}"
+              - "  Local Groups: {{ groups_to_configure | join(', ') }}"
+              - "  Active Times: Always (Al0000-2400)"
+              - "  Services: sshd only"
+              - "  TTYs: !tty* (local console excluded)"
+              - ""
+              - "Members of AD group '%{{ _ad_group_name }}@{{ ad_domain }}' will be temporarily added to"
+              - "the local group(s) during their SSH session."
+              - ""
+              - "Configuration file: {{ group_conf_file }}"
+              - "PAM module: pam_group.so enabled in {{ pam_sshd_file }} (auth stack)"
+              - ""
+              - "IMPORTANT NOTES:"
+              - "  - Group membership is temporary and only active during login sessions"
+              - "  - Users must log out and log back in for changes to take effect"
+              - "  - SSHD will be restarted for PAM changes to take effect"
+              - "  - Only /etc/pam.d/sshd is modified - no shared PAM files affected"
+              - "  - For permanent membership, use standard group management tools"
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
