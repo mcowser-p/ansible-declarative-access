@@ -10,7 +10,7 @@ The pipeline has two halves:
   footprint* (a diff of everything an install changed against a clean
   baseline) and exports a **declarative access profile** — an Ansible vars
   file (`cairn footprint --access-vars`).
-- **This collection (`mcowser_p.linux_access`)** applies that profile with the
+- **This collection (`mcowser_p.declarative_access`)** applies that profile with the
   `declarative_access` role: scoped sudoers grants, POSIX ACLs, ownership,
   and lingering for rootless services.
 

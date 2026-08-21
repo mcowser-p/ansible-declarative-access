@@ -1,7 +1,7 @@
 {
   "name": "ansible-declarative-access-release",
   "private": true,
-  "description": "Release toolchain for the mcowser_p.linux_access collection (semantic-release)",
+  "description": "Release toolchain for the mcowser_p.declarative_access collection (semantic-release)",
   "devDependencies": {
     "semantic-release": "25.0.9",
     "@semantic-release/commit-analyzer": "13.0.1",

@@ -14,7 +14,7 @@ Using your team's AD group and/or service account, you can specify exactly what 
 > **Variable naming:** all role variables are prefixed `declarative_access_`
 > (Ansible Galaxy standard). Migrating older playbooks? See the mapping table
 > in [docs/declarative-systemd-access.md](docs/declarative-systemd-access.md#variable-migration-v1--galaxy-standard-names).
-> The repo also builds as the **`mcowser_p.linux_access`** collection
+> The repo also builds as the **`mcowser_p.declarative_access`** collection
 > (`ansible-galaxy collection build`).
 
 ## Quick Start: Generated Access Profiles (cairn)

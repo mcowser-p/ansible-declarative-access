@@ -22,5 +22,5 @@ jobs:
       - name: Run ansible-lint
         run: ansible-lint -c .github/workflows/etc/.ansible-lint
 
-      - name: Validate collection builds (mcowser_p.linux_access)
+      - name: Validate collection builds (mcowser_p.declarative_access)
         run: ansible-galaxy collection build --force

@@ -12,7 +12,7 @@ venv/
 tmp/
 roles/declarative_access/tmp/
 # built collection artifacts (ansible-galaxy collection build)
-mcowser_p-linux_access-*.tar.gz
+mcowser_p-declarative_access-*.tar.gz
 
 # IDE
 .idea/

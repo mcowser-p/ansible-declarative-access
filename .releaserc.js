@@ -37,7 +37,7 @@ module.exports = {
         // Collections -> API token, signed in as mcowser-p, which owns the
         // mcowser_p namespace) exported in .github/workflows/release.yml.
         publishCmd:
-          "ansible-galaxy collection publish mcowser_p-linux_access-${nextRelease.version}.tar.gz --token $GALAXY_API_KEY",
+          "ansible-galaxy collection publish mcowser_p-declarative_access-${nextRelease.version}.tar.gz --token $GALAXY_API_KEY",
       },
     ],
     [
@@ -46,7 +46,7 @@ module.exports = {
         successCommentCondition: false,
         failCommentCondition: false,
         assets: [
-          { path: "mcowser_p-linux_access-*.tar.gz", label: "Ansible collection (mcowser_p.linux_access)" },
+          { path: "mcowser_p-declarative_access-*.tar.gz", label: "Ansible collection (mcowser_p.declarative_access)" },
         ],
       },
     ],

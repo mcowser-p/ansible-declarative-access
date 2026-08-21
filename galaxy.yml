@@ -1,5 +1,5 @@
 ---
-# Ansible Galaxy collection manifest for mcowser_p.linux_access.
+# Ansible Galaxy collection manifest for mcowser_p.declarative_access.
 #
 # `version` is a placeholder — semantic-release stamps the released version
 # here at release time (see .releaserc.js) before building the collection
@@ -8,7 +8,7 @@
 # Licensed under Apache-2.0 (see LICENSE) — accepted by public
 # galaxy.ansible.com.
 namespace: mcowser_p
-name: linux_access
+name: declarative_access
 version: 0.0.0
 readme: README.md
 authors:
