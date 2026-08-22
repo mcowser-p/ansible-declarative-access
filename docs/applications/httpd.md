@@ -1,7 +1,7 @@
 # Apache httpd — the Apache web server
 
 *Audience: anyone from a college freshman up. Every fact about "what the
-install creates" below comes from a real cairn footprint captured on a clean
+install creates" below comes from a real treadmark footprint captured on a clean
 AlmaLinux 9 host (httpd 2.4.62, 2026-07) — not from memory.*
 
 ## What is it?
@@ -43,7 +43,7 @@ systemctl status httpd            # "active (running)"
 
 ## 2. What the install actually sets up
 
-From the cairn footprint of this exact install — **880 files added, 235
+From the treadmark footprint of this exact install — **880 files added, 235
 modified** — the parts that matter:
 
 **A service account.** The RPM creates the `apache` user and group
@@ -156,7 +156,7 @@ httpd installed, configured with drop-ins, and serving.
 The platform team captures what you did and generates your access profile:
 
 ```bash
-sudo cairn footprint --config /etc/cairn/cairn-footprint-linux.yaml \
+sudo treadmark footprint --config /etc/treadmark/treadmark-footprint-linux.yaml \
   --app httpd --report footprint-httpd.json --access-vars httpd-access.yml
 ```
 
@@ -183,7 +183,7 @@ explained in
 > **Note — the setgid on `/var/www` is intentional drift.** httpd ships no
 > group-writable content dir (unlike Tomcat's `webapps`), so the profile makes
 > `/var/www` `root:apache 2775` to grant content writes through the group. That
-> deviates from the vendor's `root:root 0755`, so `rpm -V` and cairn drift
+> deviates from the vendor's `root:root 0755`, so `rpm -V` and treadmark drift
 > checks will flag it — record it in the golden-baseline accept-list as
 > reviewed drift.
 
@@ -209,7 +209,7 @@ we adding on" list to review:
 | **ACL (read)** | `setfacl` `rX` for the AD group on `/var/log/httpd` | read logs |
 
 The sudoers file is a real new file on the host — when you re-footprint the
-finished server against the OS baseline, cairn captures it (with its full
+finished server against the OS baseline, treadmark captures it (with its full
 contents) in `privilege.sudoers_files[]`, so the exact sudo grant is part of
 the record. `--tags cleanup` removes the sudoers file, the group.conf entry,
 and the ACLs (the ownership/chown is state, not reverted).

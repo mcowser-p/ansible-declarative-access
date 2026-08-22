@@ -6,10 +6,10 @@ podman quadlets they set up, and the folders that got created — nothing else.
 
 The pipeline has two halves:
 
-- **[cairn](https://github.com/mcowser-p/cairn)** captures an *install
+- **[treadmark](https://github.com/mcowser-p/treadmark)** captures an *install
   footprint* (a diff of everything an install changed against a clean
   baseline) and exports a **declarative access profile** — an Ansible vars
-  file (`cairn footprint --access-vars`).
+  file (`treadmark footprint --access-vars`).
 - **This collection (`mcowser_p.declarative_access`)** applies that profile with the
   `declarative_access` role: scoped sudoers grants, POSIX ACLs, ownership,
   and lingering for rootless services.
@@ -27,8 +27,8 @@ and the flip to restricted admin — is documented in
 ```mermaid
 flowchart LR
     subgraph capture["Build / staging host"]
-        A["Clean OS baseline<br/>cairn files init"] --> B["Team installs<br/>their application"]
-        B --> C["cairn footprint --app myapp<br/>--report footprint.json<br/>--access-vars myapp-access.yml"]
+        A["Clean OS baseline<br/>treadmark files init"] --> B["Team installs<br/>their application"]
+        B --> C["treadmark footprint --app myapp<br/>--report footprint.json<br/>--access-vars myapp-access.yml"]
     end
     C --> D["myapp-access.yml<br/>(declarative access profile)"]
     D --> E{"Human review:<br/>units, folders,<br/>ownership, linger"}
@@ -45,17 +45,17 @@ flowchart LR
 Step by step:
 
 1. **Baseline** a clean host (or rootfs) before the team touches it:
-   `sudo cairn files init --config cairn-footprint-linux.yaml`
+   `sudo treadmark files init --config treadmark-footprint-linux.yaml`
 2. **Install**: the team installs their application — services, timers,
    quadlets, config/state/log directories, service accounts.
 3. **Capture + export**:
 
    ```sh
-   sudo cairn footprint --config cairn-footprint-linux.yaml \
+   sudo treadmark footprint --config treadmark-footprint-linux.yaml \
        --app myapp --report footprint-myapp.json \
        --access-vars myapp-access.yml
    # or later, from an archived footprint:
-   cairn access-vars footprint-myapp.json -o myapp-access.yml
+   treadmark access-vars footprint-myapp.json -o myapp-access.yml
    ```
 
 4. **Review** `myapp-access.yml` (it is deliberately small and diffable —
@@ -87,7 +87,7 @@ flowchart TD
     O --> U["systemctl --user manage own quadlets<br/>~/.config/containers/systemd/<br/>no sudo involved"]
 ```
 
-## The vars contract (what cairn emits, what the role consumes)
+## The vars contract (what treadmark emits, what the role consumes)
 
 | Key | Role behavior | Artifact on target |
 |---|---|---|
@@ -103,7 +103,7 @@ flowchart TD
 | `declarative_access_ownership` | `chown`/`chmod` per entry `{path, owner, group, mode, recurse}` — path may be a **file or folder**; hand-authorable | Unix ownership/mode |
 | `declarative_access_user` / `_group` | **Never in the profile.** Passed at apply time (`-e group_name=…` / `-e user_name=…`); the role requires exactly one | — |
 
-Derivation notes (cairn side):
+Derivation notes (treadmark side):
 
 - Unit names come from `services.systemd_units` / `services.quadlets` in the
   footprint; template units (`foo@.service`) and user-scope units are excluded.
@@ -119,7 +119,7 @@ Derivation notes (cairn side):
 
 The molecule scenario pins this contract in CI:
 `roles/declarative_access/molecule/default/files/molecule-access-vars.yml`
-must stay in lockstep with cairn's exporter (pinned there by
+must stay in lockstep with treadmark's exporter (pinned there by
 `tests/test_accessvars.py::test_contract_shape_matches_fixture`).
 
 ## File access: pam_group and ACLs
@@ -191,8 +191,8 @@ ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
   -e enable_pam_group=true -e '{"declarative_access_local_groups": ["mysql"]}'
 ```
 
-**cairn surfaces this for you.** The footprint's `group_access` section lists
-what each install-created group can already write/read, and `cairn footprint
+**treadmark surfaces this for you.** The footprint's `group_access` section lists
+what each install-created group can already write/read, and `treadmark footprint
 --access-vars` automatically routes a granted directory that such a group
 already writes through `local_groups` (pam_group) instead of an ACL. So where
 the vendor already made a group writable (Tomcat ships `webapps` as `0775
@@ -203,7 +203,7 @@ does the profile fall back to a setgid group-owned dir or an ACL.
 
 > **A note on setgid and drift.** The setgid content dirs (e.g. `/var/www` →
 > `root:apache 2775`) are a deliberate change from the vendor's shipped
-> ownership, so `rpm -V` and cairn's own drift monitoring will flag them. That
+> ownership, so `rpm -V` and treadmark's own drift monitoring will flag them. That
 > is *intentional, reviewed* drift — record it in the golden-baseline
 > accept-list (see the lifecycle doc) so it doesn't read as tampering. Prefer
 > an already-group-writable dir (pam_group only, no drift) wherever the install
@@ -227,10 +227,10 @@ With lingering, the user manager starts at boot and keeps running.
 `XDG_RUNTIME_DIR` (`/run/user/<uid>`) is created by logind for lingering
 users, which rootless podman requires.
 
-cairn detects rootless quadlets by path (`/home/<user>/.config/containers/systemd/`,
+treadmark detects rootless quadlets by path (`/home/<user>/.config/containers/systemd/`,
 `/root/.config/…`, `/etc/containers/systemd/users/<uid>/`) and emits the
 owners into `declarative_access_linger_users`. Capturing them requires `/home`
-in the cairn config's `paths` (commented out by default).
+in the treadmark config's `paths` (commented out by default).
 
 Cleanup caution: lingering is per-user, not per-profile. `--tags cleanup`
 disables lingering for the listed users, which stops **all** their rootless
@@ -265,7 +265,7 @@ services at session end — including ones other profiles rely on.
 - **Vendor-packaged units:** write ACLs on files under
   `/usr/lib/systemd/system` will make `rpm -V` report the package as
   modified. Prefer profiles whose units live in `/etc/systemd/system`.
-- **Review is the control point.** cairn derives the profile from what the
+- **Review is the control point.** treadmark derives the profile from what the
   install *did*, which is not automatically what the team *should* keep
   administering. The vars file is small on purpose — read it.
 
@@ -366,4 +366,4 @@ systemd host.
 - Target hosts: EL 9/10; podman ≥ 4.4 for quadlets (`.pod` needs ≥ 5.0,
   `.image` ≥ 4.8, `.build` ≥ 5.2).
 - Collection deps: `community.general`, `ansible.posix`, `microsoft.ad`.
-- cairn ≥ 0.11 (quadlet/timer capture + `--access-vars`).
+- treadmark ≥ 0.11 (quadlet/timer capture + `--access-vars`).

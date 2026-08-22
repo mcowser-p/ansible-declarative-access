@@ -1,7 +1,7 @@
 # Apache Tomcat — a Java web-application server
 
 *Audience: college-freshman level and up. Every "what the install creates"
-fact comes from a real cairn footprint of `dnf install tomcat` on AlmaLinux 9
+fact comes from a real treadmark footprint of `dnf install tomcat` on AlmaLinux 9
 (Tomcat 9.0) — not from memory.*
 
 ## What is it?
@@ -143,7 +143,7 @@ your app's config; they're shared system runtime, so the reviewer drops them
 (and the vendor unit ACLs). For access, Tomcat is the **easiest** case:
 **pam_group into the `tomcat` group** is all that's needed to deploy WARs,
 because the package already ships `/var/lib/tomcat/webapps` as `0775
-root:tomcat` — no setgid or ACL required there. cairn's footprint confirms this
+root:tomcat` — no setgid or ACL required there. treadmark's footprint confirms this
 in its `group_access` section, which shows the `tomcat` group already has write
 on `webapps` **and** on `/etc/tomcat/Catalina` (per-app context configs) — so
 pam_group covers those with zero drift. Only editing the top-level config files

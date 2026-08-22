@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # capture-app-footprint.sh — install an app in a clean systemd container,
-# capture a cairn footprint, and print the evidence needed to write its guide.
+# capture a treadmark footprint, and print the evidence needed to write its guide.
 #
 # Usage:  scripts/capture-app-footprint.sh <package> [el9|el10] [extra pkgs...]
-# Env:    CAIRN_SRC=/path/to/cairn   (required)
+# Env:    TREADMARK_SRC=/path/to/treadmark   (required)
 #         DOCKER_HOST=unix://$HOME/.docker/run/docker.sock  (macOS Docker Desktop)
 #
 # Leaves artifacts in /tmp/app-guide-<package>/ and the container running
@@ -17,34 +17,34 @@ EXTRA="$*"
 IMG="almalinux/9-init"; [ "$EL" = "el10" ] && IMG="almalinux/10-init"
 NAME="app-guide-${PKG}"
 OUT="/tmp/app-guide-${PKG}"
-: "${CAIRN_SRC:?set CAIRN_SRC to the cairn repo path}"
+: "${TREADMARK_SRC:?set TREADMARK_SRC to the treadmark repo path}"
 mkdir -p "$OUT"
 
 echo "[*] starting $IMG as $NAME"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --privileged --name "$NAME" \
-  -v "${CAIRN_SRC}:/opt/cairn-src:ro" "$IMG" >/dev/null
+  -v "${TREADMARK_SRC}:/opt/treadmark-src:ro" "$IMG" >/dev/null
 sleep 5
 
 docker exec -i "$NAME" bash -s -- "$PKG" "$EXTRA" <<'INNER'
 set -euo pipefail
 PKG="$1"; EXTRA="$2"
 dnf install -y -q python3-pip sudo >/dev/null
-pip3 -q install /opt/cairn-src pyyaml >/dev/null 2>&1
-mkdir -p /etc/cairn /var/lib/cairn
-cp /opt/cairn-src/packaging/cairn-footprint-linux.yaml /etc/cairn/footprint.yaml
+pip3 -q install /opt/treadmark-src pyyaml >/dev/null 2>&1
+mkdir -p /etc/treadmark /var/lib/treadmark
+cp /opt/treadmark-src/packaging/treadmark-footprint-linux.yaml /etc/treadmark/footprint.yaml
 python3 - <<PY
 import yaml
-c = yaml.safe_load(open("/etc/cairn/footprint.yaml"))
-c.setdefault("exclude", []).extend(["/var/lib/containers/","/var/lib/cairn/","/etc/cairn/"])
-yaml.safe_dump(c, open("/etc/cairn/footprint.yaml","w"))
+c = yaml.safe_load(open("/etc/treadmark/footprint.yaml"))
+c.setdefault("exclude", []).extend(["/var/lib/containers/","/var/lib/treadmark/","/etc/treadmark/"])
+yaml.safe_dump(c, open("/etc/treadmark/footprint.yaml","w"))
 PY
 echo "[*] handover baseline"
-cairn files init --config /etc/cairn/footprint.yaml >/dev/null
+treadmark files init --config /etc/treadmark/footprint.yaml >/dev/null
 echo "[*] installing $PKG $EXTRA"
 dnf install -y -q $PKG $EXTRA >/dev/null
 echo "[*] capturing footprint"
-cairn footprint --config /etc/cairn/footprint.yaml --app "${PKG%%-*}" \
+treadmark footprint --config /etc/treadmark/footprint.yaml --app "${PKG%%-*}" \
   --report /root/footprint.json --access-vars /root/access.yml >/dev/null 2>&1 || true
 INNER
 

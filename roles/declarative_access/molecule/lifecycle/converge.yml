@@ -12,9 +12,9 @@
     # Phase 2 — handover snapshot (before the team gets access)
     ###########################################################################
     - name: Capture the handover baseline
-      ansible.builtin.command: cairn files init --config /etc/cairn/footprint.yaml
+      ansible.builtin.command: treadmark files init --config /etc/treadmark/footprint.yaml
       args:
-        creates: /var/lib/cairn/clean-baseline.db
+        creates: /var/lib/treadmark/clean-baseline.db
 
     ###########################################################################
     # Phase 3 — setup window: the team installs their application
@@ -111,7 +111,7 @@
     ###########################################################################
     - name: Capture the footprint and access profile
       ansible.builtin.command: >-
-        cairn footprint --config /etc/cairn/footprint.yaml --app demo
+        treadmark footprint --config /etc/treadmark/footprint.yaml --app demo
         --report /root/footprint-demo.json --access-vars /root/demo-access.yml
       register: lifecycle_footprint
       changed_when: true

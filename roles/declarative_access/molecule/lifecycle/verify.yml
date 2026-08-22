@@ -14,7 +14,7 @@
     ###########################################################################
     # 1. The generated profile captured what the team installed
     ###########################################################################
-    - name: "profile: Assert cairn captured the team's units, folders, ownership"
+    - name: "profile: Assert treadmark captured the team's units, folders, ownership"
       ansible.builtin.assert:
         that:
           - lifecycle_profile.declarative_access_profile_name == 'demo'
@@ -147,7 +147,7 @@
         fail_msg: >-
           pam FAILED: ssh id = {{ lifecycle_ssh_id.stdout }} /
           su id = {{ lifecycle_su_id.stdout }}
-        success_msg: "pam OK: dev1 lands in nginx during ssh sessions only — full cairn->profile->pam_group chain proven"
+        success_msg: "pam OK: dev1 lands in nginx during ssh sessions only — full treadmark->profile->pam_group chain proven"
 
     ###########################################################################
     # 5. Revoke via the REAL CLI path: --tags cleanup

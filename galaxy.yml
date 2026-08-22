@@ -18,7 +18,7 @@ description: >-
   services, timers, and podman quadlets; POSIX ACLs on files and folders;
   ownership enforcement; PAM group mapping; realm login; and lingering for
   rootless services. Profiles can be generated from install footprints by
-  cairn (`cairn footprint --access-vars`).
+  treadmark (`treadmark footprint --access-vars`).
 license:
   - Apache-2.0
 tags:

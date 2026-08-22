@@ -1,7 +1,7 @@
 # MySQL — a relational database server
 
 *Audience: college-freshman level and up. Every "what the install creates"
-fact comes from a real cairn footprint of `dnf install mysql-server` on
+fact comes from a real treadmark footprint of `dnf install mysql-server` on
 AlmaLinux 9 (MySQL 8.0) — not from memory.*
 
 > **EL10 note:** AlmaLinux 10 does **not** ship `mysql-server`. On EL10 use

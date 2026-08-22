@@ -15,7 +15,7 @@
 #   3. Sudo — comprehensive verification of all rendered sudoers commands
 #   4. PAM group — verify group.conf entries and pam_group.so in sshd
 #   5. Timers/quadlets — verify scoped unit grants (incl. absent actions)
-#   6. cairn contract — apply files/molecule-access-vars.yml end to end
+#   6. treadmark contract — apply files/molecule-access-vars.yml end to end
 #   7. Cleanup — re-runs role with --tags cleanup, verifies removal
 ###########################################################################
 
@@ -163,13 +163,13 @@
           - molecule-web
 
 ###########################################################################
-# cairn contract — apply the committed vars-file fixture exactly the way
+# treadmark contract — apply the committed vars-file fixture exactly the way
 # playbooks/5_apply_access_profile.yml would (vars file + entity at apply
 # time). Exercises services+timers+quadlets+unit-file write ACLs+folders+
 # ownership+linger (linger tasks are tag-skipped in containers) in one run.
 ###########################################################################
 
-- name: Test combined cairn-contract profile from vars file
+- name: Test combined treadmark-contract profile from vars file
   hosts: all
   gather_facts: false
   vars_files:

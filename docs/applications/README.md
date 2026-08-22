@@ -8,13 +8,13 @@ Per-application guides for software teams deploy on our EL servers with
   files, so changes are trackable),
 - what the install actually creates on the system — service accounts,
   systemd units, directories, and any access it configures — **grounded in
-  a real cairn footprint**, not folklore,
+  a real treadmark footprint**, not folklore,
 - how to administer its systemd service, and
 - what changes **before vs. after** access is limited to the restricted
   admin group (the [application deployment lifecycle](../application-deployment-lifecycle.md)).
 
 Guides are generated with the `app-guide` skill (`.claude/skills/app-guide/`):
-the application is installed in a clean systemd container, cairn captures the
+the application is installed in a clean systemd container, treadmark captures the
 footprint, and the guide + example access profile are written from that
 evidence.
 

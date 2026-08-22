@@ -1,6 +1,6 @@
 ---
 # Prepare = everything that exists BEFORE the team gets access: the golden
-# image tooling, the simulated AD groups, cairn, and the cairn config.
+# image tooling, the simulated AD groups, treadmark, and the treadmark config.
 - name: Prepare the lifecycle host
   hosts: all
   become: false
@@ -16,19 +16,19 @@
       delay: 5
       until: (lifecycle_systemd_state.stdout | default('')) in ['running', 'degraded']
 
-    - name: Assert the cairn source tree is mounted (CAIRN_SRC)
+    - name: Assert the treadmark source tree is mounted (TREADMARK_SRC)
       ansible.builtin.stat:
-        path: /opt/cairn-src/pyproject.toml
-      register: lifecycle_cairn_src
+        path: /opt/treadmark-src/pyproject.toml
+      register: lifecycle_treadmark_src
 
-    - name: Fail with guidance when CAIRN_SRC is not set
+    - name: Fail with guidance when TREADMARK_SRC is not set
       ansible.builtin.assert:
         that:
-          - lifecycle_cairn_src.stat.exists
+          - lifecycle_treadmark_src.stat.exists
         fail_msg: >-
-          /opt/cairn-src is empty — export CAIRN_SRC=/path/to/the/cairn/repo
-          before running: CAIRN_SRC=... molecule test -s lifecycle
-        success_msg: "cairn source tree is mounted."
+          /opt/treadmark-src is empty — export TREADMARK_SRC=/path/to/the/treadmark/repo
+          before running: TREADMARK_SRC=... molecule test -s lifecycle
+        success_msg: "treadmark source tree is mounted."
 
     - name: Install platform tooling
       ansible.builtin.package:
@@ -52,10 +52,10 @@
         state: started
         enabled: true
 
-    - name: Install cairn (from the mounted source) and PyYAML
-      ansible.builtin.command: pip3 install /opt/cairn-src pyyaml
+    - name: Install treadmark (from the mounted source) and PyYAML
+      ansible.builtin.command: pip3 install /opt/treadmark-src pyyaml
       args:
-        creates: /usr/local/bin/cairn
+        creates: /usr/local/bin/treadmark
 
     - name: Install collections the role needs inside the container
       ansible.builtin.command: ansible-galaxy collection install community.general ansible.posix
@@ -103,29 +103,29 @@
         key: "{{ lifecycle_root_pubkey.content | b64decode }}"
         state: present
 
-    - name: Create cairn config and state directories
+    - name: Create treadmark config and state directories
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
         mode: '0755'
       loop:
-        - /etc/cairn
-        - /var/lib/cairn
+        - /etc/treadmark
+        - /var/lib/treadmark
 
     - name: Install the footprint config with rehearsal excludes
       ansible.builtin.shell: |
         set -e
-        cp /opt/cairn-src/packaging/cairn-footprint-linux.yaml /etc/cairn/footprint.yaml
+        cp /opt/treadmark-src/packaging/treadmark-footprint-linux.yaml /etc/treadmark/footprint.yaml
         python3 - <<'EOF'
         import yaml
-        cfg = yaml.safe_load(open("/etc/cairn/footprint.yaml"))
+        cfg = yaml.safe_load(open("/etc/treadmark/footprint.yaml"))
         cfg.setdefault("exclude", []).extend(
-            ["/var/lib/containers/", "/var/lib/cairn/", "/etc/cairn/"])
-        yaml.safe_dump(cfg, open("/etc/cairn/footprint.yaml", "w"),
+            ["/var/lib/containers/", "/var/lib/treadmark/", "/etc/treadmark/"])
+        yaml.safe_dump(cfg, open("/etc/treadmark/footprint.yaml", "w"),
                        default_flow_style=False)
         EOF
       args:
-        creates: /etc/cairn/footprint.yaml
+        creates: /etc/treadmark/footprint.yaml
 
     - name: Create the playbook staging directory
       ansible.builtin.file:

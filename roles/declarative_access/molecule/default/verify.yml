@@ -16,7 +16,7 @@
 #   14.   Empty unit lists/commands — verify no sudoers file created
 #   15.   Timers — scoped <name>.timer grants (explicit suffix only)
 #   16.   Quadlets — lifecycle-only grants on the generated service
-#   17.   cairn contract — vars-file profile end to end: sudoers +
+#   17.   treadmark contract — vars-file profile end to end: sudoers +
 #         unit-file write ACLs + folders + ownership
 #   18.   Cleanup — re-run with --tags cleanup, verify all files removed
 #         AND that granted ACLs are revoked (incl. default ACLs; a real
@@ -1009,13 +1009,13 @@
         success_msg: "quadlets OK: passes visudo validation"
 
     ###########################################################################
-    # 17. cairn contract — the committed vars-file fixture applied end to end
+    # 17. treadmark contract — the committed vars-file fixture applied end to end
     #     (services + timers + quadlets + unit-file write ACLs + folders +
     #     ownership; linger is tag-skipped in containers)
     ###########################################################################
     - name: "contract: Read sudoers content"
       ansible.builtin.slurp:
-        src: /etc/sudoers.d/cairn-contract-test_group
+        src: /etc/sudoers.d/treadmark-contract-test_group
       register: contract_raw
 
     - name: "contract: Decode sudoers content"
@@ -1047,7 +1047,7 @@
         success_msg: "contract OK: pam_group maps the team into the service group"
 
     - name: "contract: Lint sudoers file with visudo"
-      ansible.builtin.command: visudo -cf /etc/sudoers.d/cairn-contract-test_group
+      ansible.builtin.command: visudo -cf /etc/sudoers.d/treadmark-contract-test_group
       register: visudo_contract_lint
       changed_when: false
 
@@ -1646,7 +1646,7 @@
         declarative_access_group: test_group
         declarative_access_profile_name: "test-runas"
 
-    # --- Cleanup: timers / quadlets / cairn contract ---
+    # --- Cleanup: timers / quadlets / treadmark contract ---
     - name: "cleanup: Sudo cleanup for timers test"
       ansible.builtin.include_role:
         name: declarative_access
@@ -1663,15 +1663,15 @@
         declarative_access_group: test_group
         declarative_access_profile_name: "test-quadlets"
 
-    - name: "cleanup: Sudo cleanup for cairn contract test"
+    - name: "cleanup: Sudo cleanup for treadmark contract test"
       ansible.builtin.include_role:
         name: declarative_access
         tasks_from: sudo_cleanup.yml
       vars:
         declarative_access_group: test_group
-        declarative_access_profile_name: "cairn-contract"
+        declarative_access_profile_name: "treadmark-contract"
 
-    - name: "cleanup: PAM group cleanup for cairn contract test"
+    - name: "cleanup: PAM group cleanup for treadmark contract test"
       ansible.builtin.include_role:
         name: declarative_access
         tasks_from: pam_group_cleanup.yml
@@ -1738,7 +1738,7 @@
         - /etc/sudoers.d/test-runas-test_group
         - /etc/sudoers.d/test-timers-test_group
         - /etc/sudoers.d/test-quadlets-test_group
-        - /etc/sudoers.d/cairn-contract-test_group
+        - /etc/sudoers.d/treadmark-contract-test_group
         - /etc/sudoers.d/test-actions-test_group
         - /etc/sudoers.d/test-absent-test_group
         - /etc/sudoers.d/test-tagcleanup-test_group

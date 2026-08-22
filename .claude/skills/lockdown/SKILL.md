@@ -2,7 +2,7 @@
 name: lockdown
 description: >
   Ops runbook: lock down a customer's Linux server after they finish
-  deploying — capture the cairn footprint, review it into an access
+  deploying — capture the treadmark footprint, review it into an access
   profile, apply it with playbook 5, verify allow/deny, then flip the
   customer from <hostname>-app_full to <hostname>-app_restricted. Use when a
   customer repo's deployment manifest reads ready-for-lockdown. (app-guide
@@ -24,15 +24,15 @@ bastion or workstation that can ssh to the server and reach AD.
   pipeline exists but is disabled and the GitHub repo
   (`git@github.com:mcowser-p/ansible-declarative-access.git`) has not
   received its first push; until then, use the maintainer's checkout.
-- **cairn on the server, with access-vars support.** The quadlet/timer/
+- **treadmark on the server, with access-vars support.** The quadlet/timer/
   pam_group capture lives on the `claude/declarative-systemd-access-07d979`
-  branch of `https://github.com/mcowser-p/cairn.git` until it merges:
-  `sudo pipx install 'git+https://github.com/mcowser-p/cairn.git@claude/declarative-systemd-access-07d979'`.
-  A main-line cairn will silently miss quadlets. Gate:
-  `cairn footprint --help | grep -q access-vars || echo WRONG-CAIRN`.
+  branch of `https://github.com/mcowser-p/treadmark.git` until it merges:
+  `sudo pipx install 'git+https://github.com/mcowser-p/treadmark.git@claude/declarative-systemd-access-07d979'`.
+  A main-line treadmark will silently miss quadlets. Gate:
+  `treadmark footprint --help | grep -q access-vars || echo WRONG-TREADMARK`.
 - **Baseline provenance.** The clean baseline must predate the setup
   window. Check the `baseline` block of a trial report, or the mtime of
-  `/var/lib/cairn/footprint-baseline.db`. A baseline created after the
+  `/var/lib/treadmark/footprint-baseline.db`. A baseline created after the
   install started makes the footprint void — stop and escalate; do not
   improvise a baseline.
 - **Customer inputs.** Their repo's `config/deploy/manifest.yml` with
@@ -44,13 +44,13 @@ bastion or workstation that can ssh to the server and reach AD.
 On the server, as root:
 
 ```
-sudo cairn footprint --config /etc/cairn/cairn-footprint-linux.yaml \
+sudo treadmark footprint --config /etc/treadmark/treadmark-footprint-linux.yaml \
   --app <app> --report footprint-<app>.json --access-vars <app>-access.yml
 ```
 
 Exit 1 means "footprint found" — that is success. Archive both files; the
 profile can be re-emitted later from the JSON with
-`cairn access-vars footprint-<app>.json -o <app>-access.yml`.
+`treadmark access-vars footprint-<app>.json -o <app>-access.yml`.
 
 ## 2. Cross-check against the manifest
 
@@ -141,7 +141,7 @@ pam path.
 
 1. **Refresh the baseline only after** the footprint and profile are
    committed (`--accept-all` erases the forensic diff):
-   `sudo cairn files update --accept-all --config /etc/cairn/cairn-footprint-linux.yaml`
+   `sudo treadmark files update --accept-all --config /etc/treadmark/treadmark-footprint-linux.yaml`
 2. **AD**: remove the user(s) from `<hostname>-app_full` and add them
    directly to `<hostname>-app_restricted`. Manual today — a wrapper
    playbook following playbook 1's `microsoft.ad.group` + Vault pattern

@@ -1,7 +1,7 @@
 # PostgreSQL — an advanced relational database server
 
 *Audience: college-freshman level and up. Every "what the install creates"
-fact comes from a real cairn footprint of `dnf install postgresql-server` on
+fact comes from a real treadmark footprint of `dnf install postgresql-server` on
 AlmaLinux 9 (PostgreSQL 13) — not from memory.*
 
 ## What is it?

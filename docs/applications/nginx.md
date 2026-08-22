@@ -1,7 +1,7 @@
 # nginx — a fast web server and reverse proxy
 
 *Audience: college-freshman level and up. Every "what the install creates"
-fact comes from a real cairn footprint of `dnf install nginx` on AlmaLinux 9
+fact comes from a real treadmark footprint of `dnf install nginx` on AlmaLinux 9
 (nginx 1.20) — not from memory.*
 
 ## What is it?
@@ -153,7 +153,7 @@ Standard [application deployment lifecycle](../application-deployment-lifecycle.
 **Before — setup window (app admin):** full admin via `wheel`. Install,
 configure with drop-ins, get it serving. Keep it short.
 
-**Capture & review:** cairn generates the profile; the reviewer shapes it
+**Capture & review:** treadmark generates the profile; the reviewer shapes it
 (reasoning in [examples/nginx-access.yml](../../examples/nginx-access.yml);
 mechanism in [File access: pam_group and ACLs](../declarative-systemd-access.md#file-access-pam_group-and-acls))
 exactly like httpd — **pam_group into the `nginx` group** for the baseline,
@@ -166,7 +166,7 @@ applied to `<hostname>-app_restricted`.
 > **Note — the setgid on `/usr/share/nginx/html` is intentional drift.** Like
 > httpd, nginx ships no group-writable content dir, so the profile makes the
 > web root group-owned + setgid to grant content writes through the group.
-> That deviates from vendor ownership, so `rpm -V` / cairn drift checks flag it
+> That deviates from vendor ownership, so `rpm -V` / treadmark drift checks flag it
 > — record it in the golden-baseline accept-list as reviewed drift.
 
 **After — restricted admin.** Verified end to end against a real running

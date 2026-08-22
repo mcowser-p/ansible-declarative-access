@@ -1,15 +1,15 @@
 ---
 # LIFECYCLE scenario — the end-to-end application-deployment rehearsal:
-#   cairn baseline -> team installs app (nginx + timer + quadlet) ->
-#   cairn footprint --access-vars -> apply the RAW generated profile via
+#   treadmark baseline -> team installs app (nginx + timer + quadlet) ->
+#   treadmark footprint --access-vars -> apply the RAW generated profile via
 #   playbooks/5_apply_access_profile.yml (run INSIDE the container, so the
 #   real CLI path incl. `--tags cleanup` is exercised) -> flip the user to
 #   the restricted group -> verify allowed/denied -> revoke -> verify.
 #
-# LOCAL-ONLY: requires the cairn source tree, mounted via the CAIRN_SRC env
+# LOCAL-ONLY: requires the treadmark source tree, mounted via the TREADMARK_SRC env
 # var. CI runs only the default scenario (`molecule test` without -s).
 #
-#   CAIRN_SRC=/path/to/cairn \
+#   TREADMARK_SRC=/path/to/treadmark \
 #   [DOCKER_HOST=unix://$HOME/.docker/run/docker.sock] \
 #   molecule test -s lifecycle
 #
@@ -24,7 +24,7 @@ platforms:
     command: /sbin/init
     privileged: true
     volumes:
-      - "${CAIRN_SRC:-/tmp/cairn-src-not-set}:/opt/cairn-src:ro"
+      - "${TREADMARK_SRC:-/tmp/treadmark-src-not-set}:/opt/treadmark-src:ro"
       - "${MOLECULE_PROJECT_DIRECTORY}:/opt/linux-access/roles/declarative_access:ro"
   - name: lifecycle10
     image: almalinux/10-init
@@ -32,7 +32,7 @@ platforms:
     command: /sbin/init
     privileged: true
     volumes:
-      - "${CAIRN_SRC:-/tmp/cairn-src-not-set}:/opt/cairn-src:ro"
+      - "${TREADMARK_SRC:-/tmp/treadmark-src-not-set}:/opt/treadmark-src:ro"
       - "${MOLECULE_PROJECT_DIRECTORY}:/opt/linux-access/roles/declarative_access:ro"
 
 role_name_check: 1

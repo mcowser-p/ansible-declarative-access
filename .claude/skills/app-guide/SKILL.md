@@ -1,6 +1,6 @@
 ---
 name: app-guide
-description: Generate an evidence-based application deployment guide (docs/applications/<app>.md) plus a reviewed access profile (examples/<app>-access.yml) for a dnf-installable EL app. Use when asked to document how a web server, database, or other package is installed, set up, administered, and locked down under the declarative_access lifecycle. Grounds every "what the install creates" claim in a real cairn footprint captured in a container — never write these from memory.
+description: Generate an evidence-based application deployment guide (docs/applications/<app>.md) plus a reviewed access profile (examples/<app>-access.yml) for a dnf-installable EL app. Use when asked to document how a web server, database, or other package is installed, set up, administered, and locked down under the declarative_access lifecycle. Grounds every "what the install creates" claim in a real treadmark footprint captured in a container — never write these from memory.
 ---
 
 # Writing an application deployment guide
@@ -16,7 +16,7 @@ its systemd service, and the **before/after** of restricting access to the
 ## Non-negotiable: capture real evidence first
 
 Never describe "what the install creates" from memory. Install the app in a
-clean systemd container, capture a cairn footprint, and write from the JSON.
+clean systemd container, capture a treadmark footprint, and write from the JSON.
 The helper script does the whole dance:
 
 ```bash
@@ -37,7 +37,7 @@ It prints, and leaves in `/tmp/app-guide-<package>/`:
 Read the EVIDENCE block and the raw profile. Those are your facts.
 
 Requires Docker (on macOS: `export DOCKER_HOST=unix://$HOME/.docker/run/docker.sock`)
-and the cairn source tree (`export CAIRN_SRC=/path/to/cairn`).
+and the treadmark source tree (`export TREADMARK_SRC=/path/to/treadmark`).
 
 ## Guide structure (match httpd.md)
 
@@ -87,7 +87,7 @@ Start from the raw profile, then tighten — and **explain each edit in comments
 - **Add content/log dirs the footprint missed** — app data outside the config
   tree (`/var/www`, a DB data dir) and `/var/log/<app>` (`/var/log` is excluded
   from footprints by default). Note these as reviewer additions.
-- **Keep ownership entries** cairn captured for install-created accounts.
+- **Keep ownership entries** treadmark captured for install-created accounts.
 - **Never** set `declarative_access_user`/`_group` — the operator passes the
   team at apply time.
 

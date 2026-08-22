@@ -17,16 +17,16 @@ Using your team's AD group and/or service account, you can specify exactly what 
 > The repo also builds as the **`mcowser_p.declarative_access`** collection
 > (`ansible-galaxy collection build`).
 
-## Quick Start: Generated Access Profiles (cairn)
+## Quick Start: Generated Access Profiles (treadmark)
 
 The fastest path for an *application team's* access is to generate the profile
-from what their install actually created. cairn captures an install footprint
+from what their install actually created. treadmark captures an install footprint
 on a build/staging host and exports a ready-to-review vars file — services,
 timers, quadlets, unit files, folders, and ownership:
 
 ```bash
 # On the build host, after the team installs their app:
-sudo cairn footprint --config cairn-footprint-linux.yaml \
+sudo treadmark footprint --config treadmark-footprint-linux.yaml \
   --app myapp --report footprint-myapp.json --access-vars myapp-access.yml
 
 # Review myapp-access.yml (see examples/myapp-access.yml for the shape), then:

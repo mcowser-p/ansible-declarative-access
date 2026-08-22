@@ -211,7 +211,7 @@
       loop:
         - httpd
         - nginx
-        - molecule-app     # the cairn-contract fixture's service group
+        - molecule-app     # the treadmark-contract fixture's service group
         - pamtest-group    # target group for the behavioral ssh tests
         - sim-ad-group     # stands in for an AD group (local, no domain)
         - tagcleanup-group # target group for the --tags cleanup CLI test
@@ -384,11 +384,11 @@
         mode: '0644'
 
     ###########################################################################
-    # Timer / quadlet / cairn-contract fixtures
+    # Timer / quadlet / treadmark-contract fixtures
     #
     # Fixture unit files stand in for what an application install drops on
     # disk. The contract vars file (files/molecule-access-vars.yml) mirrors
-    # the exact shape `cairn footprint --access-vars` emits and references
+    # the exact shape `treadmark footprint --access-vars` emits and references
     # these paths.
     ###########################################################################
     - name: Create fixture systemd service unit
@@ -441,7 +441,7 @@
         dest: /etc/containers/systemd/molecule-web.container
         mode: '0644'
 
-    - name: Create cairn-contract folder fixtures
+    - name: Create treadmark-contract folder fixtures
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory

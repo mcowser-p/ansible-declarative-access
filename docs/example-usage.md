@@ -270,15 +270,15 @@ ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webse
   -l "ps-zzzapp-tst*"
 ```
 
-### Scenario 4: Access Profile Generated from an Install Footprint (cairn)
+### Scenario 4: Access Profile Generated from an Install Footprint (treadmark)
 
-A team installed their application on a build host; cairn captured the
+A team installed their application on a build host; treadmark captured the
 footprint and exported the access profile (services, timers, quadlets, unit
 files, folders, ownership). Apply it with the team's group:
 
 ```bash
 # On the build host (once, after the install):
-sudo cairn footprint --config cairn-footprint-linux.yaml \
+sudo treadmark footprint --config treadmark-footprint-linux.yaml \
   --app myapp --report footprint-myapp.json --access-vars myapp-access.yml
 
 # Review myapp-access.yml, then apply:
@@ -301,7 +301,7 @@ See `docs/declarative-systemd-access.md` for the full workflow and diagrams.
 - **Main Documentation**: See `README.md` for comprehensive guide
 - **Application deployment lifecycle**: See `docs/application-deployment-lifecycle.md` (Packer builds, handover baseline, setup window, review gate, flip to restricted admin)
 - **Per-application guides**: See `docs/applications/` (httpd + a menu of dnf web servers and databases — install, drop-in setup, admin, and before/after access)
-- **Declarative systemd access workflow**: See `docs/declarative-systemd-access.md` (cairn pipeline, diagrams, security tradeoffs)
+- **Declarative systemd access workflow**: See `docs/declarative-systemd-access.md` (treadmark pipeline, diagrams, security tradeoffs)
 - **Role Documentation**: See `roles/declarative_access/README.md` for role details
 - **Example generated profile**: See `examples/myapp-access.yml`
 - **Molecule Tests**: See `molecule/` directories for testing examples
