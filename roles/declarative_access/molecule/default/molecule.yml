@@ -11,6 +11,12 @@ platforms:
   - name: ubuntu2404
     image: ubuntu:24.04
     pre_build_image: true
+  - name: ubuntu2604
+    image: ubuntu:26.04
+    pre_build_image: true
+  - name: al2023
+    image: amazonlinux:2023
+    pre_build_image: true
 
 role_name_check: 1
 dependency:
