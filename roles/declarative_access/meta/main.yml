@@ -17,6 +17,10 @@ galaxy_info:
     - name: Ubuntu
       versions:
         - 'noble'
+        - 'resolute'
+    - name: Amazon
+      versions:
+        - '2023'
 
   galaxy_tags:
     - acl
