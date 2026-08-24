@@ -55,20 +55,26 @@
           - hostname is defined
           - ad_domain_server is defined
           - ad_ou_path is defined
-          - vault_addr is defined
-          - vault_cert_check is defined
-        fail_msg: "Required variables 'hostname', 'ad_domain_server', 'ad_ou_path', 'vault_addr', and 'vault_cert_check' must be defined"
+        fail_msg: "Required variables 'hostname', 'ad_domain_server' and 'ad_ou_path' must be defined"
         success_msg: "Required variables are defined"
 
-    - name: Validate HashiCorp Vault credentials retrieved
+    # Asserts that credentials EXIST, not that Vault supplied them. The Vault
+    # lookup above is commented out, so requiring vault_addr and
+    # vault_cert_check meant any non-Vault caller -- a lab, a one-off run --
+    # had to invent two variables that are never read, purely to get past this
+    # gate. Where the credentials came from is the caller's business.
+    - name: Validate AD credentials are available
       ansible.builtin.assert:
         that:
           - ad_username is defined
           - ad_password is defined
           - ad_username | length > 0
           - ad_password | length > 0
-        fail_msg: "Failed to retrieve valid credentials from HashiCorp Vault at {{ vault_path_ad }}"
-        success_msg: "Successfully retrieved credentials from HashiCorp Vault"
+        fail_msg: >-
+          ad_username and ad_password must be set. Uncomment the
+          community.hashi_vault lookup in this playbook's vars to source them
+          from Vault, or pass them another way (-e, inventory, a vars file).
+        success_msg: "AD credentials are available"
 
     - name: Display configuration
       ansible.builtin.debug:
@@ -89,9 +95,15 @@
         state: present
       loop: "{{ ad_groups }}"
 
+    # identity:, NOT name:. Given name: with no path:, the module resolves
+    # CN=<name>,<the domain's default group container> -- i.e. CN=Users. With a
+    # non-default ad_ou_path it therefore fails to find the group it just
+    # created, and being state: present CREATES A DUPLICATE in CN=Users. The
+    # nesting then silently applies to the wrong object. sAMAccountName
+    # resolves domain-wide and cannot miss.
     - name: Add group membership - app-full as member of app-restricted
       microsoft.ad.group:
-        name: "{{ hostname }}-app_restricted"
+        identity: "{{ hostname }}-app_restricted"
         members:
           add:
             - "{{ hostname }}-app_full"
@@ -101,13 +113,16 @@
 
     - name: Add group membership - server_admins as member of admin-full
       microsoft.ad.group:
-        name: "{{ hostname }}-admin_full"
+        identity: "{{ hostname }}-admin_full"
         members:
           add:
             - "{{ server_admins }}"
         domain_server: "{{ ad_domain_server }}"
         domain_credentials: "{{ domain_credentials }}"
         state: present
+      # Documented as optional in vars, so skip rather than fail when a caller
+      # manages admin_full membership elsewhere.
+      when: server_admins | default('') | length > 0
 
     - name: Display created groups
       ansible.builtin.debug:
