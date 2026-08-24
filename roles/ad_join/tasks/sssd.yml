@@ -9,11 +9,11 @@
     section: "domain/{{ ad_join_domain }}"
     option: "{{ item.key }}"
     value: "{{ item.value }}"
-    owner: root
-    group: root
-    # auth-sleuth's sssd_conf check fails on anything looser, and sssd itself
-    # refuses to start if the file is group- or world-readable.
-    mode: "0600"
+    # Ownership and mode are deliberately NOT managed. sssd runs as User=sssd
+    # Group=sssd on EL9+, so realm join leaves this file 0640 root:sssd and the
+    # daemon needs that group read to start at all. Forcing 0600 root:root here
+    # both broke that and produced a permanent "changed" on every run, because
+    # the platform put it back.
     no_extra_spaces: true
   loop: "{{ _contract | dict2items }}"
   vars:
@@ -35,9 +35,6 @@
     section: "domain/{{ ad_join_domain }}"
     option: "{{ item.key }}"
     value: "{{ item.value }}"
-    owner: root
-    group: root
-    mode: "0600"
     no_extra_spaces: true
   loop: "{{ ad_join_sssd_domain_options | dict2items }}"
   loop_control:
@@ -50,9 +47,6 @@
     section: sssd
     option: "{{ item.key }}"
     value: "{{ item.value }}"
-    owner: root
-    group: root
-    mode: "0600"
     no_extra_spaces: true
   loop: "{{ ad_join_sssd_service_options | dict2items }}"
   loop_control:

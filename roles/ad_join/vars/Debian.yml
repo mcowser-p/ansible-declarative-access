@@ -16,3 +16,4 @@ ad_join_packages:
   # realmd to start cleanly.
   - packagekit
 ad_join_pam_manager: pam-auth-update
+ad_join_chrony_conf: /etc/chrony/chrony.conf

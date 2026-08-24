@@ -7,21 +7,25 @@
     name: chrony
     state: present
 
+# A marked block in the main config rather than a drop-in file: the drop-in
+# directory is not portable. AlmaLinux 10 ships /etc/chrony.conf with only
+# `sourcedir /run/chrony-dhcp` and no /etc/chrony.d at all, Debian uses
+# /etc/chrony/conf.d, and creating a directory chrony has not been told to read
+# is a silent no-op. A block is idempotent everywhere and cleanly removable.
 - name: Time - point chrony at the domain controllers
-  ansible.builtin.copy:
-    dest: /etc/chrony.d/ad_join.conf
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      # Managed by the ad_join role: the DCs are the domain's time authority.
+  ansible.builtin.blockinfile:
+    path: "{{ ad_join_chrony_conf }}"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK ad_join"
+    block: |
       {% for dc in (ad_join_dcs if ad_join_dcs | length > 0 else [ad_join_domain]) %}
       server {{ dc }} iburst
       {% endfor %}
-  register: ad_join_chrony_conf
+    create: false
+    backup: true
+  register: ad_join_chrony_block
 
 - name: Time - chrony running
   ansible.builtin.systemd_service:
     name: "{{ 'chrony' if ansible_facts['os_family'] == 'Debian' else 'chronyd' }}"
-    state: "{{ 'restarted' if ad_join_chrony_conf.changed else 'started' }}"
+    state: "{{ 'restarted' if ad_join_chrony_block.changed else 'started' }}"
     enabled: true

@@ -30,8 +30,14 @@
         - /etc/krb5.keytab
         - "/etc/krb5.conf.d/ad_join-{{ ad_join_realm | lower }}.conf"
         - /etc/ssh/sshd_config.d/60-ad-join.conf
-        - /etc/chrony.d/ad_join.conf
         - /etc/realmd.conf
+
+    - name: Cleanup - remove the chrony block
+      ansible.builtin.blockinfile:
+        path: "{{ ad_join_chrony_conf | default('/etc/chrony.conf') }}"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK ad_join"
+        state: absent
+      failed_when: false
 
     # The cache outlives the config. Left behind, a later rejoin resolves stale
     # UIDs and group memberships from a directory that no longer agrees.

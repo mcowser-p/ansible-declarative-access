@@ -10,3 +10,4 @@ ad_join_packages:
   - krb5-workstation
   - authselect
 ad_join_pam_manager: authselect
+ad_join_chrony_conf: /etc/chrony.conf

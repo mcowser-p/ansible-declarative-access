@@ -5,18 +5,29 @@
 # stack is settled HERE, before any access grant exists to be destroyed.
 # auth-sleuth's authselect_drift check catches a later regression; this prevents
 # the first one.
+# Compared against `authselect current` rather than inferred from the output of
+# `select`: authselect prints the profile it applied whether or not anything
+# changed, so parsing its stdout reports changed on every run. It also makes the
+# task genuinely conditional, which matters because `select --force` REGENERATES
+# /etc/pam.d/sshd -- running it needlessly on a configured host is what destroys
+# a pam_group.so line that declarative_access added later.
+- name: PAM - the current authselect configuration
+  ansible.builtin.command:
+    argv: [authselect, current, --raw]
+  register: ad_join_authselect_current
+  changed_when: false
+  failed_when: false
+  when: ad_join_pam_manager == 'authselect'
+
 - name: PAM - select the sssd profile (RHEL family)
   ansible.builtin.command:
-    argv:
-      - authselect
-      - select
-      - "{{ ad_join_authselect_profile }}"
-      - "{{ ad_join_authselect_features | join(' ') }}"
-      - --force
-  register: ad_join_authselect
-  changed_when: "'No existing configuration detected' in ad_join_authselect.stdout
-                 or 'Profile' in ad_join_authselect.stdout"
-  when: ad_join_pam_manager == 'authselect'
+    argv: "{{ ['authselect', 'select', ad_join_authselect_profile]
+              + ad_join_authselect_features + ['--force'] }}"
+  changed_when: true
+  when:
+    - ad_join_pam_manager == 'authselect'
+    - (ad_join_authselect_current.stdout | default('') | trim)
+      != ([ad_join_authselect_profile] + ad_join_authselect_features | sort) | join(' ')
 
 - name: PAM - enable mkhomedir (Debian family)
   ansible.builtin.command:
