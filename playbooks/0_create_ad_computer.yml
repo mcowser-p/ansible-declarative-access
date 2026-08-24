@@ -1,0 +1,117 @@
+---
+# Pre-stage the AD computer object for a host, before it joins.
+#
+# Step 0a of the numbered series: this runs before 0_join_domain.yml, which runs
+# before 1_create_ad_groups.yml.
+#
+# WHY pre-stage. A join creates the computer object wherever the joining client
+# asks -- or in CN=Computers if it does not ask -- which leaves an AD placement
+# decision sitting in whoever's shell is running the join. Pre-staging moves it
+# into this playbook: the object exists, in the named OU, before anything joins,
+# and the join can only bind to it.
+#
+# It is also what lets a Linux host join WITHOUT a domain-admin credential. With
+# a one-time password set on the machine account, the host authenticates AS
+# ITSELF; AD rotates that password on first use, so the value is single-shot.
+#
+#   ansible-playbook playbooks/0_create_ad_computer.yml \
+#     -e hostname=web01 \
+#     -e ad_computer_ou="OU=Linux,OU=Servers,DC=example,DC=com" \
+#     -e ad_username=... -e ad_password=...
+#
+# The one-time password is printed once. Nothing stores it: pass it straight to
+# 0_join_domain.yml as ad_join_one_time_password.
+
+- name: Pre-stage an AD computer object
+  hosts: "{{ target | default('localhost') }}"
+  gather_facts: false
+
+  vars:
+    ad_domain_server: "example.com"
+    ad_computer_platform: linux          # linux | windows
+    ad_computer_generate_otp: "{{ ad_computer_platform == 'linux' }}"
+    domain_credentials:
+      - name: credentials
+        username: "{{ ad_username }}"
+        password: "{{ ad_password }}"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - hostname is defined
+          - ad_computer_ou is defined
+          - ad_domain_server is defined
+        fail_msg: "'hostname', 'ad_computer_ou' and 'ad_domain_server' must be defined"
+
+    - name: Validate AD credentials are available
+      ansible.builtin.assert:
+        that:
+          - ad_username is defined
+          - ad_password is defined
+          - ad_username | length > 0
+          - ad_password | length > 0
+        fail_msg: "ad_username and ad_password must be set"
+
+    # identity:, NOT name:. Given name: with no path:, the module resolves
+    # CN=<name>,CN=Computers, fails to find an object staged into a custom OU,
+    # and being state: present CREATES A SECOND ONE. sAMAccountName resolves
+    # domain-wide, which also makes this the reconciler: `path` MOVES an object
+    # some earlier join dropped in the wrong container.
+    - name: Computer object exists in the named OU
+      microsoft.ad.computer:
+        identity: "{{ hostname | upper }}$"
+        name: "{{ hostname | upper }}"
+        sam_account_name: "{{ hostname | upper }}$"
+        dns_hostname: "{{ hostname | lower }}.{{ ad_domain_server }}"
+        path: "{{ ad_computer_ou }}"
+        enabled: true
+        domain_server: "{{ ad_domain_server }}"
+        domain_credentials: "{{ domain_credentials }}"
+        state: present
+
+    # EL9+ ships a crypto policy with RC4 disabled. A computer object with no
+    # msDS-SupportedEncryptionTypes leaves the KDC on its default set, and the
+    # resulting "KDC has no support for encryption type" at join time reads like
+    # a network fault rather than a directory one.
+    #
+    # NOT microsoft.ad.computer's kerberos_encryption_types: its Set path calls
+    # .GetType() on $ADObject.KerberosEncryptionType.Value, which is null when
+    # the attribute has never been written -- i.e. exactly a pre-staged object.
+    - name: AES-only Kerberos on the computer object
+      microsoft.ad.object:
+        identity: "{{ hostname | upper }}$"
+        attributes:
+          set:
+            msDS-SupportedEncryptionTypes: 24     # 0x08 AES128 | 0x10 AES256
+        domain_server: "{{ ad_domain_server }}"
+        domain_credentials: "{{ domain_credentials }}"
+        state: present
+      when: ad_computer_platform == 'linux'
+
+    - name: Generate a one-time join password
+      ansible.builtin.set_fact:
+        ad_computer_otp: "{{ lookup('community.general.random_string',
+                                    length=24, special=false, upper=true,
+                                    lower=true, numbers=true) }}"
+      when: ad_computer_generate_otp | bool
+
+    - name: Set the one-time join password on the machine account
+      microsoft.ad.computer:
+        identity: "{{ hostname | upper }}$"
+        sam_account_name: "{{ hostname | upper }}$"
+        password: "{{ ad_computer_otp }}"
+        domain_server: "{{ ad_domain_server }}"
+        domain_credentials: "{{ domain_credentials }}"
+        state: present
+      no_log: true
+      when: ad_computer_generate_otp | bool
+
+    - name: One-time join password
+      ansible.builtin.debug:
+        msg:
+          - "Pre-staged {{ hostname | upper }}$ in {{ ad_computer_ou }}"
+          - "One-time join password: {{ ad_computer_otp }}"
+          - "Pass it to 0_join_domain.yml as ad_join_one_time_password."
+          - "AD rotates it on first use, so it works exactly once."
+      when: ad_computer_generate_otp | bool

@@ -1,0 +1,66 @@
+---
+# defaults file for ad_join
+#
+# Establishes the domain membership that declarative_access assumes. That role
+# runs `realm permit` and writes pam_group mappings for AD principals; none of
+# it means anything until a host is joined, and nothing in this collection did
+# the joining. This role is that missing step 0.
+#
+# Scope boundary: this role ESTABLISHES, mcowser_p.auth_sleuth DIAGNOSES. SRV
+# and Global Catalog discovery, time-skew measurement, sssctl domain-status,
+# nsswitch auditing, authselect-drift correlation and pamtester all live there
+# and are deliberately not reimplemented here. This role's own check is a
+# binary post-condition: adcli testjoin plus one keyed getent.
+
+# --- identity ---------------------------------------------------------------
+ad_join_domain: ""                                  # required, e.g. lab.internal
+ad_join_realm: "{{ ad_join_domain | upper }}"
+ad_join_computer_ou: ""                             # OU=Linux,OU=Servers,DC=lab,DC=internal
+ad_join_computer_name: "{{ ansible_facts['hostname'] | upper }}"
+ad_join_user: ""                                    # an account able to join
+ad_join_password: ""
+# Set instead of user/password to join a PRE-STAGED computer object with no
+# privileged account in play. AD rotates the machine password on first use, so
+# the value dies the moment it works.
+ad_join_one_time_password: ""
+ad_join_dcs: []                                     # pin DCs; empty = SRV discovery
+
+# --- method and prerequisites -----------------------------------------------
+# realm wraps adcli and also writes sssd.conf; adcli is the lower-level path and
+# the only one that takes a one-time password. Selected automatically below.
+ad_join_method: "{{ 'adcli' if ad_join_one_time_password | length > 0 else 'realm' }}"
+ad_join_manage_time: true                           # Kerberos tolerates +/-5 minutes
+ad_join_manage_resolver: false                      # tofu already points DNS at the DC
+ad_join_mkhomedir: true
+
+# --- the identity contract pinned into sssd.conf ----------------------------
+ad_join_use_fqns: true                              # user@domain, what every consumer assumes
+ad_join_id_mapping: true                            # UIDs derived from the object SID
+ad_join_default_shell: /bin/bash
+ad_join_fallback_homedir: "/home/%u@%d"
+# NOT realmd's default of `ad`. access_provider = ad routes logon through GPO
+# evaluation with ad_gpo_access_control enforcing, which produces the classic
+# "resolves fine under getent, permission denied at ssh" failure. `simple` with
+# an empty allow list is fail-closed, which is the correct posture between the
+# join and the first `realm permit`.
+ad_join_access_provider: simple
+ad_join_gpo_access_control: permissive
+ad_join_dyndns_update: true
+ad_join_sssd_domain_options: {}                     # extra [domain/<d>] keys
+ad_join_sssd_service_options: {}                    # extra [sssd] keys
+
+# --- distro branching (computed; override for an unusual host) --------------
+ad_join_admin_group: "{{ 'sudo' if ansible_facts['os_family'] == 'Debian' else 'wheel' }}"
+ad_join_authselect_profile: sssd
+ad_join_authselect_features: [with-mkhomedir]
+
+# --- optional sshd surface for AD identities --------------------------------
+# The golden images are CIS-hardened to key-only auth. An AD user has no key on
+# the host, so without a scoped re-enable they cannot authenticate at all and
+# the whole SSSD claim goes untested. Listing groups here emits a Match Group
+# block; local accounts keep key-only auth.
+ad_join_sshd_password_auth_groups: []
+
+# --- lifecycle --------------------------------------------------------------
+ad_join_state: joined                               # joined | left
+ad_join_leave_remove_computer: false                # deleting the AD object needs credentials

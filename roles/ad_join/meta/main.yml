@@ -1,0 +1,33 @@
+---
+galaxy_info:
+  namespace: mcowser_p
+  role_name: ad_join
+  author: mcowser-p
+  description: >-
+    Join a Linux host to Active Directory and establish the SSSD identity
+    contract that declarative_access depends on - realm/adcli join, sssd.conf,
+    Kerberos, nsswitch and the PAM stack.
+  license: Apache-2.0
+  min_ansible_version: '2.14'
+
+  platforms:
+    - name: EL
+      versions:
+        - '9'
+        - '10'
+    - name: Ubuntu
+      versions:
+        - 'noble'
+        - 'resolute'
+    - name: Amazon
+      versions:
+        - '2023'
+
+  galaxy_tags:
+    - activedirectory
+    - sssd
+    - kerberos
+    - realmd
+    - authentication
+
+dependencies: []

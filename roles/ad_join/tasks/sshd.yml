@@ -1,0 +1,19 @@
+---
+# The golden images are CIS-hardened to PasswordAuthentication no. An AD user
+# has no key on the host, so without a scoped re-enable they cannot authenticate
+# at all -- and "SSSD works" would go untested because nobody could ever log in
+# to prove it. Match Group resolves through NSS, so an AD group name works here,
+# and local accounts keep key-only auth.
+- name: SSHD - allow password auth for the named AD groups
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/60-ad-join.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/sbin/sshd -t -f %s
+    content: |
+      # Managed by the ad_join role.
+      Match Group {{ ad_join_sshd_password_auth_groups | join(',') }}
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication yes
+  notify: Restart sshd

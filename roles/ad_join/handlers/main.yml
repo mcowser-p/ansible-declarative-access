@@ -1,0 +1,13 @@
+---
+- name: Restart sssd
+  ansible.builtin.systemd_service:
+    name: sssd
+    state: restarted
+    enabled: true
+
+# Debian calls the unit `ssh`, the RHEL family calls it `sshd`. Restarting the
+# wrong name is a silent no-op that leaves the old config live.
+- name: Restart sshd
+  ansible.builtin.systemd_service:
+    name: "{{ 'ssh' if ansible_facts['os_family'] == 'Debian' else 'sshd' }}"
+    state: restarted

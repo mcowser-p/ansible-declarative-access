@@ -1,0 +1,42 @@
+---
+# Reverses this role, mirroring the *_cleanup.yml convention in
+# declarative_access. Ordering matters: leave the domain while sssd can still
+# talk to it, then take the client config away.
+- name: ad_join cleanup
+  block:
+    - name: Cleanup - leave the domain
+      ansible.builtin.include_tasks: leave.yml
+
+    - name: Cleanup - restore a local-only PAM stack
+      ansible.builtin.command:
+        argv: [authselect, select, minimal, --force]
+      changed_when: true
+      failed_when: false
+      when: ad_join_pam_manager == 'authselect'
+
+    - name: Cleanup - stop sssd
+      ansible.builtin.systemd_service:
+        name: sssd
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Cleanup - remove the client configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/sssd/sssd.conf
+        - /etc/krb5.keytab
+        - "/etc/krb5.conf.d/ad_join-{{ ad_join_realm | lower }}.conf"
+        - /etc/ssh/sshd_config.d/60-ad-join.conf
+        - /etc/chrony.d/ad_join.conf
+        - /etc/realmd.conf
+
+    # The cache outlives the config. Left behind, a later rejoin resolves stale
+    # UIDs and group memberships from a directory that no longer agrees.
+    - name: Cleanup - drop the sssd caches
+      ansible.builtin.shell:
+        cmd: rm -f /var/lib/sss/db/* /var/lib/sss/mc/*
+      changed_when: true
+      failed_when: false

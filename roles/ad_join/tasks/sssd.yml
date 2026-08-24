@@ -1,0 +1,94 @@
+---
+# Line-level, never templated. `realm permit` rewrites simple_allow_groups in
+# this same file out of band, and declarative_access drives that -- a full
+# template here would start an idempotence war with the role this one exists to
+# support. Only the keys this role owns are pinned.
+- name: SSSD - pin the identity contract
+  community.general.ini_file:
+    path: /etc/sssd/sssd.conf
+    section: "domain/{{ ad_join_domain }}"
+    option: "{{ item.key }}"
+    value: "{{ item.value }}"
+    owner: root
+    group: root
+    # auth-sleuth's sssd_conf check fails on anything looser, and sssd itself
+    # refuses to start if the file is group- or world-readable.
+    mode: "0600"
+    no_extra_spaces: true
+  loop: "{{ _contract | dict2items }}"
+  vars:
+    _contract:
+      use_fully_qualified_names: "{{ ad_join_use_fqns | string }}"
+      ldap_id_mapping: "{{ ad_join_id_mapping | string }}"
+      fallback_homedir: "{{ ad_join_fallback_homedir }}"
+      default_shell: "{{ ad_join_default_shell }}"
+      access_provider: "{{ ad_join_access_provider }}"
+      ad_gpo_access_control: "{{ ad_join_gpo_access_control }}"
+      dyndns_update: "{{ ad_join_dyndns_update | string }}"
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+  notify: Restart sssd
+
+- name: SSSD - caller-supplied domain options
+  community.general.ini_file:
+    path: /etc/sssd/sssd.conf
+    section: "domain/{{ ad_join_domain }}"
+    option: "{{ item.key }}"
+    value: "{{ item.value }}"
+    owner: root
+    group: root
+    mode: "0600"
+    no_extra_spaces: true
+  loop: "{{ ad_join_sssd_domain_options | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  notify: Restart sssd
+
+- name: SSSD - caller-supplied service options
+  community.general.ini_file:
+    path: /etc/sssd/sssd.conf
+    section: sssd
+    option: "{{ item.key }}"
+    value: "{{ item.value }}"
+    owner: root
+    group: root
+    mode: "0600"
+    no_extra_spaces: true
+  loop: "{{ ad_join_sssd_service_options | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  notify: Restart sssd
+
+# A drop-in rather than krb5.conf itself: the package owns that file and an
+# upgrade would overwrite it.
+- name: SSSD - Kerberos realm drop-in
+  ansible.builtin.copy:
+    dest: "/etc/krb5.conf.d/ad_join-{{ ad_join_realm | lower }}.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by the ad_join role.
+      [libdefaults]
+        default_realm = {{ ad_join_realm }}
+        dns_lookup_realm = true
+        dns_lookup_kdc = true
+        # Lab reverse DNS is rarely complete, and rdns = true makes GSSAPI
+        # derive the service principal from a PTR that may not exist.
+        rdns = false
+
+- name: SSSD - running and enabled
+  ansible.builtin.systemd_service:
+    name: sssd
+    state: started
+    enabled: true
+
+# authselect owns nsswitch on the RHEL family and the libnss-sss postinst does
+# it on Debian, so this verifies rather than edits -- auth-sleuth's fix_nsswitch
+# remediation likewise refuses to hand-edit an authselect-managed file.
+- name: SSSD - nsswitch resolves through sss
+  ansible.builtin.command:
+    argv: [getent, --service, sss, passwd]
+  register: ad_join_nss
+  changed_when: false
+  failed_when: false

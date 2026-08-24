@@ -1,0 +1,23 @@
+---
+- name: Leave - is this host joined?
+  ansible.builtin.command:
+    argv: [adcli, testjoin, --domain, "{{ ad_join_domain }}"]
+  register: ad_join_leave_test
+  changed_when: false
+  failed_when: false
+
+- name: Leave - the domain
+  ansible.builtin.command:
+    argv: "{{ _argv }}"
+  vars:
+    # --remove-computer deletes the AD object and therefore needs a credential.
+    # Default is a local-only leave, which matches this collection's stance that
+    # credential-requiring directory changes are not automated.
+    _argv: >-
+      {{ ['realm', 'leave', '--verbose']
+         + (['--remove-computer', '--user', ad_join_user]
+            if (ad_join_leave_remove_computer | bool and ad_join_user | length > 0)
+            else [])
+         + [ad_join_domain] }}
+  changed_when: true
+  when: ad_join_leave_test.rc == 0

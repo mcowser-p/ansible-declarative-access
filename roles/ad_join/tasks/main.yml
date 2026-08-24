@@ -1,0 +1,49 @@
+---
+# tasks file for ad_join
+#
+# Order is load-bearing. authselect apply-changes REGENERATES /etc/pam.d/sshd
+# and drops any pam_group.so line written into it, so the PAM stack must be
+# settled here before declarative_access adds its mapping. Run this role first,
+# then create the AD groups, then apply access.
+
+- name: Load OS-family variables
+  ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+
+- name: Assert
+  ansible.builtin.include_tasks: assert.yml
+
+- name: Leave the domain
+  ansible.builtin.include_tasks: leave.yml
+  when: ad_join_state == 'left'
+
+- name: Join and configure
+  when: ad_join_state == 'joined'
+  block:
+    - name: Packages
+      ansible.builtin.include_tasks: packages.yml
+
+    - name: Time
+      ansible.builtin.include_tasks: time.yml
+      when: ad_join_manage_time | bool
+
+    - name: Join
+      ansible.builtin.include_tasks: join.yml
+
+    - name: SSSD
+      ansible.builtin.include_tasks: sssd.yml
+
+    - name: PAM
+      ansible.builtin.include_tasks: pam.yml
+
+    - name: SSHD
+      ansible.builtin.include_tasks: sshd.yml
+      when: ad_join_sshd_password_auth_groups | length > 0
+
+    - name: Post-check
+      ansible.builtin.include_tasks: postcheck.yml
+
+- name: Cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags:
+    - cleanup
+    - never

@@ -1,0 +1,41 @@
+---
+- name: Assert - required variables
+  ansible.builtin.assert:
+    that:
+      - ad_join_domain | length > 0
+      - ad_join_state in ['joined', 'left']
+    fail_msg: "ad_join_domain must be set and ad_join_state must be joined or left"
+
+- name: Assert - a way to authenticate the join
+  ansible.builtin.assert:
+    that:
+      - (ad_join_user | length > 0 and ad_join_password | length > 0)
+        or ad_join_one_time_password | length > 0
+    fail_msg: >-
+      Set ad_join_user + ad_join_password, or ad_join_one_time_password to bind
+      to a pre-staged computer object without a privileged account.
+  when: ad_join_state == 'joined'
+
+# NetBIOS caps the computer account at 15 characters. Over that, the join fails
+# with a message about the name being invalid rather than too long, which sends
+# people looking at DNS.
+- name: Assert - computer name fits NetBIOS
+  ansible.builtin.assert:
+    that: ad_join_computer_name | length <= 15
+    fail_msg: >-
+      ad_join_computer_name '{{ ad_join_computer_name }}' is
+      {{ ad_join_computer_name | length }} characters; NetBIOS allows 15.
+
+# A one-time password authenticates the MACHINE account, which must already
+# exist. Without the OU, adcli would try to create one and fail as an
+# unprivileged principal -- a confusing "insufficient access" rather than a
+# clear "you did not pre-stage this".
+- name: Assert - a one-time password implies a pre-staged object
+  ansible.builtin.assert:
+    that: ad_join_computer_ou | length > 0
+    fail_msg: >-
+      ad_join_one_time_password binds to a PRE-STAGED computer object, so
+      ad_join_computer_ou must name the OU it was staged into.
+  when:
+    - ad_join_state == 'joined'
+    - ad_join_one_time_password | length > 0

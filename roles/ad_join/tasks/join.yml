@@ -1,0 +1,78 @@
+---
+# `realm list` reports a join from local config alone, so it says "joined" for a
+# host whose keytab no longer matches the directory -- the exact state a rebuilt
+# DC leaves behind. adcli testjoin authenticates with the keytab, so it fails in
+# that case and the join is redone.
+- name: Join - is this host really joined?
+  ansible.builtin.command:
+    argv: [adcli, testjoin, --domain, "{{ ad_join_domain }}"]
+  register: ad_join_testjoin
+  changed_when: false
+  failed_when: false
+
+- name: Join - the domain
+  when: ad_join_testjoin.rc != 0
+  block:
+    # A pre-staged object + one-time password: the host authenticates AS ITSELF,
+    # no domain-admin credential is ever handed to the client, and AD rotates
+    # the machine password on first use so the OTP is single-shot by design.
+    - name: Join - with a one-time password (pre-staged object)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          set -o pipefail;
+          printf '%s' '{{ ad_join_one_time_password }}' |
+          adcli join '{{ ad_join_domain }}'
+          --domain-ou='{{ ad_join_computer_ou }}'
+          --computer-name='{{ ad_join_computer_name }}'
+          --host-fqdn='{{ ad_join_computer_name | lower }}.{{ ad_join_domain }}'
+          --login-type=computer
+          --stdin-password
+          --verbose
+      no_log: true
+      changed_when: true
+      notify: Restart sssd
+      when: ad_join_one_time_password | length > 0
+
+    - name: Join - with an administrative credential
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          set -o pipefail;
+          printf '%s' '{{ ad_join_password }}' |
+          realm join --unattended --verbose
+          --user='{{ ad_join_user }}'
+          {% if ad_join_computer_ou | length > 0 %}
+          --computer-ou='{{ ad_join_computer_ou }}'
+          {% endif %}
+          --computer-name='{{ ad_join_computer_name }}'
+          --os-name='{{ ansible_facts["distribution"] }}'
+          --os-version='{{ ansible_facts["distribution_version"] }}'
+          '{{ ad_join_domain }}'
+      no_log: true
+      changed_when: true
+      notify: Restart sssd
+      when: ad_join_one_time_password | length == 0
+
+# adcli joins the machine account but does not write sssd.conf -- that is
+# realm's job, and the adcli path skips it. Seed a minimal domain section so the
+# pinning step below has a file to edit.
+- name: Join - seed sssd.conf when adcli did the join
+  ansible.builtin.copy:
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+    content: |
+      [sssd]
+      domains = {{ ad_join_domain }}
+      config_file_version = 2
+      services = nss, pam
+
+      [domain/{{ ad_join_domain }}]
+      id_provider = ad
+      auth_provider = ad
+      krb5_realm = {{ ad_join_realm }}
+      realmd_tags = manages-system joined-with-adcli
+  notify: Restart sssd

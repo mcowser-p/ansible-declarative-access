@@ -1,0 +1,29 @@
+---
+# realmd on the Debian family tries to install its own dependencies through
+# PackageKit at join time and fails with "Necessary packages are not
+# installed". Everything it needs is installed here, and automatic-install is
+# turned off below, so the join never reaches for the network.
+- name: Packages - install the join and identity stack
+  ansible.builtin.package:
+    name: "{{ ad_join_packages }}"
+    state: present
+
+- name: Packages - realmd configuration
+  ansible.builtin.copy:
+    dest: /etc/realmd.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by the ad_join role.
+      [service]
+      automatic-install = no
+
+      [users]
+      default-home = {{ ad_join_fallback_homedir }}
+      default-shell = {{ ad_join_default_shell }}
+
+      [{{ ad_join_domain }}]
+      computer-ou = {{ ad_join_computer_ou }}
+      user-principal = yes
+      fully-qualified-names = {{ 'yes' if ad_join_use_fqns else 'no' }}

@@ -1,0 +1,39 @@
+---
+# Deliberately thin. Anything richer than a binary post-condition belongs in
+# mcowser_p.auth_sleuth, which already reports SRV records, Global Catalog
+# reachability, time skew, sssctl domain-status, nsswitch and the PAM stack.
+# Duplicating it here would mean two implementations of the same checks drifting
+# apart.
+- name: Post-check - flush handlers so sssd is running the new config
+  ansible.builtin.meta: flush_handlers
+
+- name: Post-check - the join authenticates with the machine keytab
+  ansible.builtin.command:
+    argv: [adcli, testjoin, --domain, "{{ ad_join_domain }}"]
+  register: ad_join_verify
+  changed_when: false
+  retries: 6
+  delay: 5
+  until: ad_join_verify.rc == 0
+
+# Resolving the machine's own domain account proves the identity path end to
+# end: sssd is up, nsswitch routes to sss, and the directory answers.
+- name: Post-check - the directory resolves through NSS
+  ansible.builtin.command:
+    argv:
+      - getent
+      - passwd
+      - "{{ ad_join_computer_name | lower }}${{ '@' ~ ad_join_domain if ad_join_use_fqns else '' }}"
+  register: ad_join_getent
+  changed_when: false
+  failed_when: false
+
+- name: Post-check - result
+  ansible.builtin.debug:
+    msg:
+      - "Joined {{ ad_join_domain }} as {{ ad_join_computer_name }}"
+      - "  computer OU  : {{ ad_join_computer_ou | default('(directory default)', true) }}"
+      - "  admin group  : {{ ad_join_admin_group }}"
+      - "  fqns         : {{ ad_join_use_fqns }}"
+      - "  access       : {{ ad_join_access_provider }} (fail-closed until realm permit runs)"
+      - "For a full diagnosis run mcowser_p.auth_sleuth.auth_sleuth."

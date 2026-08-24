@@ -1,0 +1,39 @@
+---
+# THE ordering trap in this whole stack: `authselect select` / `apply-changes`
+# REGENERATES /etc/pam.d/sshd from the profile, silently discarding the
+# `auth required pam_group.so` line declarative_access inserts there. So the PAM
+# stack is settled HERE, before any access grant exists to be destroyed.
+# auth-sleuth's authselect_drift check catches a later regression; this prevents
+# the first one.
+- name: PAM - select the sssd profile (RHEL family)
+  ansible.builtin.command:
+    argv:
+      - authselect
+      - select
+      - "{{ ad_join_authselect_profile }}"
+      - "{{ ad_join_authselect_features | join(' ') }}"
+      - --force
+  register: ad_join_authselect
+  changed_when: "'No existing configuration detected' in ad_join_authselect.stdout
+                 or 'Profile' in ad_join_authselect.stdout"
+  when: ad_join_pam_manager == 'authselect'
+
+- name: PAM - enable mkhomedir (Debian family)
+  ansible.builtin.command:
+    argv: [pam-auth-update, --enable, mkhomedir]
+  changed_when: false
+  when:
+    - ad_join_pam_manager == 'pam-auth-update'
+    - ad_join_mkhomedir | bool
+
+# pam_group evaluates membership at LOGIN, and oddjobd is what actually creates
+# the home directory on first login. Without it the session opens with no home
+# and lands the user in / -- which looks like a broken profile, not a missing
+# service.
+- name: PAM - oddjobd running for mkhomedir
+  ansible.builtin.systemd_service:
+    name: oddjobd
+    state: started
+    enabled: true
+  when: ad_join_mkhomedir | bool
+  failed_when: false

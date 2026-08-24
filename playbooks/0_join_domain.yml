@@ -1,0 +1,33 @@
+---
+# Join Linux hosts to Active Directory and establish the SSSD identity contract
+# the rest of this collection assumes.
+#
+# Step 0 of the numbered series. Everything after it -- the per-server AD groups
+# (1), the PAM baseline (2), the access profiles (5) -- operates on AD
+# principals that a host cannot resolve until this has run.
+#
+# ORDER MATTERS. This must run BEFORE 2_configure_default_pam_access.yml:
+# authselect regenerates /etc/pam.d/sshd and silently drops the pam_group.so
+# line that playbook writes.
+#
+#   # with an administrative credential
+#   ansible-playbook playbooks/0_join_domain.yml \
+#     -e ad_join_domain=example.com \
+#     -e ad_join_user=svc-join -e ad_join_password=... \
+#     -e ad_join_computer_ou="OU=Linux,OU=Servers,DC=example,DC=com"
+#
+#   # against a pre-staged object, no privileged account on the client
+#   ansible-playbook playbooks/0_join_domain.yml \
+#     -e ad_join_domain=example.com \
+#     -e ad_join_one_time_password=... \
+#     -e ad_join_computer_ou="OU=Linux,OU=Servers,DC=example,DC=com"
+#
+#   # leave:  -e ad_join_state=left      full teardown:  --tags cleanup
+
+- name: Join Active Directory
+  hosts: "{{ target | default('linux') }}"
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: ad_join
