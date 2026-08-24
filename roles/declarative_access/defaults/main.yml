@@ -100,9 +100,21 @@ declarative_access_acl_folder_modify: "rwX"
 # PAM group configuration
 declarative_access_group_conf_file: "/etc/security/group.conf"
 declarative_access_pam_sshd_file: "/etc/pam.d/sshd"
-# Domain suffix for the group.conf principal. Set "" to map a LOCAL
-# (non-AD) user or group — the principal is then written without @domain.
-declarative_access_ad_domain: "example.com"
+# AD domain suffix for the entity, applied wherever the entity is resolved
+# through NSS: the group.conf principal, the sudoers %group, and the setfacl
+# entity. Empty means a LOCAL user or group and no suffix.
+#
+# Defaults to EMPTY on purpose. It used to default to "example.com", which is a
+# placeholder no real deployment uses, so any caller that did not override it
+# silently produced <entity>@example.com -- a principal that resolves nowhere.
+# That was survivable while only pam_group consumed it, because a group.conf
+# line for a nonexistent principal is inert. It stopped being survivable once
+# setfacl and sudo started consuming it too: setfacl fails outright with
+# "Option -m: Invalid argument near character 7", and sudo writes a rule that
+# looks correct and grants nobody anything.
+#
+# An AD caller sets this explicitly. There is no sensible default domain.
+declarative_access_ad_domain: ""
 # Local groups the entity is mapped into at SSH login. Must be non-empty
 # when declarative_access_pam_group is true (profiles supply the values).
 declarative_access_local_groups: []
