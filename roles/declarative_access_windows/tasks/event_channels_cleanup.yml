@@ -1,0 +1,34 @@
+---
+# Remove the entity from Event Log Readers.
+#
+# Runs only with --tags cleanup, and needs the same
+# declarative_access_windows_event_channels list (non-empty is what says this
+# profile made the grant) and the same entity.
+#
+# CAUTION - THIS IS NOT PER-PROFILE. Event Log Readers membership is one flag
+# on the account, not a per-channel or per-profile grant. If a second profile
+# on this host also put the entity in the group, removing it here revokes
+# that profile's log access too. The Linux analog is the linger cleanup,
+# which likewise affects the whole user rather than one profile.
+#
+# As with any group change, an already-open session keeps its token until the
+# entity is logged off.
+
+- name: event_channels cleanup
+  when: declarative_access_windows_event_channels | default([]) | length > 0
+  block:
+    - name: event_channels cleanup - Remove the entity from Event Log Readers
+      ansible.windows.win_group_membership:
+        name: "{{ declarative_access_windows_event_log_readers_group }}"
+        members:
+          - "{{ declarative_access_windows_entity }}"
+        state: absent
+
+    - name: event_channels cleanup - Warn that the group is host-wide, not per-profile
+      ansible.builtin.debug:
+        msg: >-
+          {{ declarative_access_windows_entity }} was removed from
+          "{{ declarative_access_windows_event_log_readers_group }}". If another
+          profile on this host relies on that membership, re-apply it - the
+          group is one flag on the account, not a per-profile grant.
+  # Runs only when --tags cleanup is applied

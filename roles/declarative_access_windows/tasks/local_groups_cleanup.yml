@@ -1,0 +1,37 @@
+---
+# Remove the entity from the local groups this profile placed it in.
+#
+# Runs only with --tags cleanup, and needs the same
+# declarative_access_windows_local_groups list and the same entity.
+#
+# REVOCATION IS NOT IMMEDIATE. Windows builds an access token at logon and
+# never revisits it, so an already-open session keeps every right it was
+# granted until that session ends. The flip is only complete once the entity
+# is logged off:
+#
+#   quser                         # find the session
+#   logoff <id>                   # terminate it
+#   klist purge -li 0x3e7         # drop cached Kerberos tickets
+#
+# The Linux role has no equivalent step because pam_group membership expires
+# with the session on its own.
+
+- name: local_groups cleanup
+  when: declarative_access_windows_local_groups | default([]) | length > 0
+  block:
+    - name: local_groups cleanup - Remove the entity from each local group
+      ansible.windows.win_group_membership:
+        name: "{{ item }}"
+        members:
+          - "{{ declarative_access_windows_entity }}"
+        state: absent
+      loop: "{{ declarative_access_windows_local_groups }}"
+
+    - name: local_groups cleanup - Remind that open sessions keep their token
+      ansible.builtin.debug:
+        msg: >-
+          {{ declarative_access_windows_entity }} was removed from
+          {{ declarative_access_windows_local_groups | join(', ') }}. Any session
+          the entity already has open keeps its old token - force a logoff
+          (quser / logoff <id>) to complete the revocation.
+  # Runs only when --tags cleanup is applied

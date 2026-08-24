@@ -1,0 +1,140 @@
+---
+# Feature delegation - which system.webServer configuration sections a
+# delegated site connection (see wmsvc.yml) is allowed to write.
+#
+# A section's OverrideMode in applicationHost.config decides whether a site's
+# own web.config - and therefore the site's IIS Manager connection - may set
+# that section:
+#   Allow -> the delegated connection may Read/Write the feature
+#   Deny  -> the feature shows Read Only in IIS Manager, web.config setting it
+#            produces a 500.19
+#
+# So the profile's `read_write:` list becomes Allow, `read_only:` becomes
+# Deny. Sections outside both lists are not touched at all.
+#
+# MECHANISM: Microsoft.Web.Administration (shipped with IIS, no PowerShell
+# module needed) rather than `appcmd unlock config -section:<s>`. Same
+# effect; MWA lets the task read the current OverrideMode first, so `changed`
+# is accurate and the pre-change value can be snapshotted. The appcmd
+# equivalents, for the record, are:
+#   appcmd unlock config -section:<section>     # -> Allow
+#   appcmd lock   config -section:<section>     # -> Deny
+#
+# NEVER delegate: anything under system.applicationHost, and any section that
+# can name an executable or a path outside the site root. Write access to
+# applicationHost.config is root-equivalent for every site on the host.
+
+- name: delegation
+  when:
+    - declarative_access_windows_feature_delegation | default(false) | bool
+    - (declarative_access_windows_delegation | default({}, true)) | length > 0
+  block:
+    - name: delegation - Validate the delegation mapping
+      ansible.builtin.assert:
+        that:
+          - declarative_access_windows_delegation is mapping
+          - >-
+            (declarative_access_windows_delegation.read_write | default([]) | length > 0)
+            or (declarative_access_windows_delegation.read_only | default([]) | length > 0)
+          - >-
+            (declarative_access_windows_delegation.read_write | default([]))
+            | intersect(declarative_access_windows_delegation.read_only | default([]))
+            | length == 0
+        fail_msg: >-
+          Error: declarative_access_windows_delegation must be a mapping with a
+          non-empty read_write and/or read_only list, and no section may appear
+          in both (a section cannot be Allow and Deny at once).
+        success_msg: "Delegation mapping looks valid, proceeding."
+
+    - name: delegation - Ensure the snapshot directory exists
+      ansible.windows.win_file:
+        path: "{{ declarative_access_windows_snapshot_dir }}"
+        state: directory
+
+    - name: delegation - Set section override modes
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Allow: "{{ declarative_access_windows_delegation.read_write | default([]) }}"
+          Deny: "{{ declarative_access_windows_delegation.read_only | default([]) }}"
+          SnapshotPath: >-
+            {{ declarative_access_windows_snapshot_dir }}\{{
+            declarative_access_windows_profile_name }}-delegation.json
+        script: |
+          param(
+              [string[]]$Allow = @(),
+              [string[]]$Deny = @(),
+              [Parameter(Mandatory = $true)][string]$SnapshotPath
+          )
+
+          $mwa = Join-Path $env:windir 'system32\inetsrv\Microsoft.Web.Administration.dll'
+          if (-not (Test-Path -LiteralPath $mwa)) {
+              throw "Microsoft.Web.Administration.dll not found at $mwa - is IIS installed?"
+          }
+          [void][System.Reflection.Assembly]::LoadFrom($mwa)
+
+          # WRITE-ONCE SNAPSHOT. The first run records each section's
+          # pre-change OverrideMode; later runs must never overwrite it with
+          # the already-delegated value or the undo is destroyed. This is the
+          # same discipline as the NTFS and sdset snapshots, and it matters
+          # here because the shipped OverrideMode is NOT uniformly Deny -
+          # defaultDocument and directoryBrowse ship Allow, handlers and
+          # modules ship Deny. Blind-resetting everything to Deny at cleanup
+          # would leave the host tighter than the vendor shipped it.
+          $snapshot = @{}
+          if (Test-Path -LiteralPath $SnapshotPath) {
+              (Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json).PSObject.Properties |
+                  ForEach-Object { $snapshot[$_.Name] = $_.Value }
+          }
+
+          $desired = [ordered]@{}
+          foreach ($s in $Allow) { $desired[$s] = 'Allow' }
+          foreach ($s in $Deny) { $desired[$s] = 'Deny' }
+
+          $sm = New-Object Microsoft.Web.Administration.ServerManager
+          $cfg = $sm.GetApplicationHostConfiguration()
+
+          $changes = @()
+          $snapshotUpdated = $false
+          foreach ($sectionPath in $desired.Keys) {
+              # UNVERIFIED ON A LIVE HOST: setting OverrideMode on a section
+              # obtained from the apphost configuration is the documented
+              # IISAdministration recipe (Get-IISServerManager |
+              # .GetApplicationHostConfiguration().GetSection(x).OverrideMode),
+              # but whether it lands as overrideMode on <location path=""> or
+              # as overrideModeDefault in <configSections> was not confirmed
+              # here. Both delegate the section; if a review needs to see
+              # which, check with:
+              #   appcmd list config /section:<section> /commit:apphost
+              # (The spec for this role named a `Set-IISConfigSection` cmdlet -
+              # no such cmdlet exists in IISAdministration, so this is the
+              # nearest defensible mechanism rather than that call.)
+              #
+              # GetSection throws on an unknown section path - a typo in the
+              # profile fails loudly instead of silently delegating nothing.
+              $section = $cfg.GetSection($sectionPath)
+              $current = $section.OverrideMode.ToString()
+              if (-not $snapshot.ContainsKey($sectionPath)) {
+                  $snapshot[$sectionPath] = $current
+                  $snapshotUpdated = $true
+              }
+              if ($current -ne $desired[$sectionPath]) {
+                  $section.OverrideMode = [Microsoft.Web.Administration.OverrideMode]$desired[$sectionPath]
+                  $changes += [ordered]@{ section = $sectionPath; from = $current; to = $desired[$sectionPath] }
+              }
+          }
+          if ($changes.Count -gt 0) { $sm.CommitChanges() }
+
+          if ($snapshotUpdated) {
+              $snapshot | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $SnapshotPath -Encoding UTF8
+          }
+
+          $Ansible.Changed = (($changes.Count -gt 0) -or $snapshotUpdated)
+          $Ansible.Result = @{ changes = $changes; snapshot = $SnapshotPath; recorded = $snapshot }
+      register: declarative_access_windows_delegation_result
+
+    - name: delegation - Debug override mode changes
+      ansible.builtin.debug:
+        var: declarative_access_windows_delegation_result.result
+      when: declarative_access_windows_debug | default(false) | bool

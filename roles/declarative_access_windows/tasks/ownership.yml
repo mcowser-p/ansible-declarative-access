@@ -1,0 +1,45 @@
+---
+# Set the NTFS owner on files and directories.
+#
+# Complementary to the DACL grants in ntfs.yml: use ownership for the base
+# fact of who owns an object, and the folder grant lists for additive
+# per-entity access. Ownership matters on Windows beyond bookkeeping - the
+# owner always holds WRITE_DAC implicitly, so an owner can re-grant itself
+# any access regardless of the DACL. Assigning ownership is therefore a
+# stronger act than adding an ACE, and the profile should name few paths.
+#
+# Usage:
+#   declarative_access_windows_ownership:
+#     - path: C:\inetpub\app          # file OR folder
+#       owner: CONTOSO\svc-app
+#       recurse: true
+#     - path: C:\inetpub\app\web.config
+#       owner: BUILTIN\Administrators
+#
+# `recurse` is optional and defaults to false, matching the Linux role.
+#
+###########################################################################
+# NO CLEANUP - BY DESIGN
+#
+# This primitive is the one section of main.yml with no *_cleanup.yml, and it
+# matches declarative_access exactly: ownership is applied STATE, not a
+# grant. The previous owner is not recorded anywhere, so "undo" has no
+# defined meaning - re-assigning to some guessed default (Administrators,
+# SYSTEM, TrustedInstaller) would be a change this role invented rather than
+# a change it reverted.
+#
+# If ownership must be reverted, do it deliberately:
+#   icacls C:\path /setowner "<previous owner>" /T
+#
+# The pre-change owner IS recoverable for any path that also appears in a
+# folder grant list: ntfs.yml's SDDL snapshot captures the O: field.
+###########################################################################
+
+- name: Set file and directory ownership
+  ansible.windows.win_owner:
+    path: "{{ item.path }}"
+    user: "{{ item.owner }}"
+    recurse: "{{ item.recurse | default(false) }}"
+  loop: "{{ declarative_access_windows_ownership }}"
+  loop_control:
+    label: "{{ item.path }} -> {{ item.owner }}"

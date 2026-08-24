@@ -1,0 +1,11 @@
+---
+# handlers file for declarative_access_windows
+
+# WMSVC reads EnableRemoteManagement and RequiresWindowsCredentials from the
+# registry at service start, so a change to either only takes effect after a
+# restart. Restarting WMSVC drops in-flight IIS Manager connections but is
+# otherwise harmless - it does not serve site traffic (W3SVC does).
+- name: Restart WMSVC
+  ansible.windows.win_service:
+    name: "{{ declarative_access_windows_wmsvc_service }}"
+    state: restarted

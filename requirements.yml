@@ -4,3 +4,10 @@ collections:
   - name: community.docker
   - name: community.general
   - name: ansible.posix
+  # declarative_access_windows: win_acl (incl. its Cert: private-key
+  # support), win_feature, win_regedit, win_service, win_powershell,
+  # win_group_membership, win_owner, win_file, win_stat, win_template.
+  # community.windows is deliberately NOT required - nothing in the Windows
+  # role needs it (site/pool creation is the deployment's job, not this
+  # role's; the role only ever grants on objects that already exist).
+  - name: ansible.windows

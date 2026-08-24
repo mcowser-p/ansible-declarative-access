@@ -1,0 +1,92 @@
+---
+# Remove the private-key Read ACEs this profile added.
+#
+# Runs only with --tags cleanup, and needs the same
+# declarative_access_windows_cert_keys list and the same entity. win_acl
+# removes by exact match, so the rights value must match the apply side -
+# which is why it comes from the same variable.
+#
+# The resolver is re-run rather than cached: a certificate renewal between
+# apply and cleanup changes the thumbprint, and a `subject:` entry must
+# resolve against the store as it is NOW. If a certificate is simply gone,
+# resolution fails loudly - which is correct: silently skipping would leave
+# an operator believing a grant was removed when it never existed.
+
+- name: certkey cleanup
+  when: declarative_access_windows_cert_keys | default([]) | length > 0
+  block:
+    - name: certkey cleanup - Resolve certificates still present in the store
+      ansible.windows.win_powershell:
+        error_action: stop
+        # win_powershell serialises $Ansible.Result to depth 2 by
+        # default, which would flatten the nested report below into
+        # strings and break attribute access on the Ansible side.
+        depth: 4
+        parameters:
+          CertKeys: "{{ declarative_access_windows_cert_keys }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][object[]]$CertKeys
+          )
+
+          $results = @()
+          $unresolved = @()
+          foreach ($entry in $CertKeys) {
+              $store = if ($entry.store) { $entry.store } else { 'My' }
+              $storePath = "Cert:\LocalMachine\$store"
+              if (-not (Test-Path -LiteralPath $storePath)) {
+                  $unresolved += "store $storePath missing"
+                  continue
+              }
+              $candidates = @(Get-ChildItem -LiteralPath $storePath)
+
+              if ($entry.thumbprint) {
+                  $tp = ($entry.thumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+                  $match = @($candidates | Where-Object { $_.Thumbprint -eq $tp })
+                  $selector = "thumbprint $tp"
+              }
+              elseif ($entry.subject) {
+                  $match = @($candidates | Where-Object { $_.Subject -like "*$($entry.subject)*" })
+                  $selector = "subject like '*$($entry.subject)*'"
+              }
+              else {
+                  throw "each declarative_access_windows_cert_keys entry needs 'thumbprint' or 'subject'"
+              }
+
+              if ($match.Count -eq 0) {
+                  # Certificate already removed or rotated out - there is no
+                  # key ACL left to strip. Reported, never silent.
+                  $unresolved += "$selector not found in $storePath"
+                  continue
+              }
+              foreach ($cert in $match) {
+                  $results += [ordered]@{
+                      cert_path  = "Cert:\LocalMachine\$store\$($cert.Thumbprint)"
+                      thumbprint = $cert.Thumbprint
+                      subject    = $cert.Subject
+                  }
+              }
+          }
+
+          $Ansible.Changed = $false
+          $Ansible.Result = @{ certificates = $results; unresolved = $unresolved }
+      register: declarative_access_windows_certkey_cleanup_resolved
+
+    - name: certkey cleanup - Report certificates that could not be resolved
+      ansible.builtin.debug:
+        msg: >-
+          No key ACE removed for: {{ declarative_access_windows_certkey_cleanup_resolved.result.unresolved | join('; ') }}
+          - the certificate is no longer in the store, so its key ACL is gone with it.
+      when: declarative_access_windows_certkey_cleanup_resolved.result.unresolved | default([]) | length > 0
+
+    - name: certkey cleanup - Remove Read on the private key
+      ansible.windows.win_acl:
+        path: "{{ item.cert_path }}"
+        user: "{{ declarative_access_windows_entity }}"
+        rights: "{{ declarative_access_windows_rights_cert_key }}"
+        type: allow
+        state: absent
+      loop: "{{ declarative_access_windows_certkey_cleanup_resolved.result.certificates }}"
+      loop_control:
+        label: "{{ item.thumbprint }} ({{ item.subject }})"
+  # Runs only when --tags cleanup is applied

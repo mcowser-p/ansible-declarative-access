@@ -1,0 +1,137 @@
+---
+# tasks file for declarative_access_windows
+#
+# Section order and shape mirror declarative_access/tasks/main.yml exactly:
+# one `include_tasks` per primitive, each immediately followed by an
+# `import_tasks <primitive>_cleanup.yml` tagged [cleanup, never]. A normal
+# run executes only the apply halves; `--tags cleanup` executes only the
+# cleanup halves.
+
+###########################################################################
+# Entity - resolve the single principal every grant is made to
+#
+# Included twice, once per run mode. A `--tags cleanup` run skips every
+# untagged task, so without the tagged copy the cleanup halves would run
+# with no entity resolved. This is the same reason setfacl_cleanup.yml on
+# the Linux side re-derives its own entity instead of trusting main.yml.
+###########################################################################
+- name: Entity
+  ansible.builtin.include_tasks: entity.yml
+
+- name: Entity for cleanup
+  ansible.builtin.import_tasks: entity.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# WMSVC - the vendor-native delegation path: remote IIS Manager for
+# non-admins, scoped to their own sites
+###########################################################################
+- name: WMSVC
+  ansible.builtin.include_tasks: wmsvc.yml
+
+- name: WMSVC cleanup
+  ansible.builtin.import_tasks: wmsvc_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Feature delegation - which system.webServer sections a delegated site
+# connection may write
+###########################################################################
+- name: Delegation
+  ansible.builtin.include_tasks: delegation.yml
+
+- name: Delegation cleanup
+  ansible.builtin.import_tasks: delegation_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# NTFS - file and folder DACLs, plus the pool-identity deny ACEs
+###########################################################################
+- name: NTFS
+  ansible.builtin.include_tasks: ntfs.yml
+
+- name: NTFS cleanup
+  ansible.builtin.import_tasks: ntfs_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Certificate private keys - Read on the key, never export
+###########################################################################
+- name: Certificate keys
+  ansible.builtin.include_tasks: certkey.yml
+
+- name: Certificate keys cleanup
+  ansible.builtin.import_tasks: certkey_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Service SDDL - sc.exe sdset start/stop/query grants. This is the
+# sudoers-verbs row of the Linux role: IIS Manager delegation cannot
+# restart W3SVC/WAS, so the service descriptor is where that grant lives.
+###########################################################################
+- name: Service SDDL
+  ansible.builtin.include_tasks: service_sdset.yml
+
+- name: Service SDDL cleanup
+  ansible.builtin.import_tasks: service_sdset_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# JEA - exact-command proxy functions for the operations neither IIS
+# delegation nor a service DACL can express (app-pool recycle, cert rebind)
+###########################################################################
+- name: JEA
+  ansible.builtin.include_tasks: jea.yml
+
+- name: JEA cleanup
+  ansible.builtin.import_tasks: jea_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Local groups - standing local group membership
+###########################################################################
+- name: Local groups
+  ansible.builtin.include_tasks: local_groups.yml
+
+- name: Local groups cleanup
+  ansible.builtin.import_tasks: local_groups_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Event channels - the journalctl analog, via the Event Log Readers group
+###########################################################################
+- name: Event channels
+  ansible.builtin.include_tasks: event_channels.yml
+
+- name: Event channels cleanup
+  ansible.builtin.import_tasks: event_channels_cleanup.yml
+  tags:
+    - cleanup
+    - never
+
+###########################################################################
+# Ownership - win_owner on files and folders.
+#
+# NO CLEANUP, matching the Linux role: ownership is applied state, not a
+# grant, and the previous owners are unknown. Re-assign deliberately if it
+# must be reverted.
+###########################################################################
+- name: Ownership
+  ansible.builtin.include_tasks: ownership.yml
+  when: declarative_access_windows_ownership is defined and declarative_access_windows_ownership | length > 0

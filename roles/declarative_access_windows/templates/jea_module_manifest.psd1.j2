@@ -1,0 +1,23 @@
+#jinja2: trim_blocks: True, lstrip_blocks: False
+# {{ ansible_managed }}
+#
+# Carrier module for this role's JEA role capabilities.
+#
+# JEA looks role capabilities up by walking $env:PSModulePath for
+# <Module>\RoleCapabilities\<Name>.psrc, so the .psrc cannot stand alone - it
+# needs a discoverable module around it. This manifest is that wrapper and
+# nothing else: no RootModule, no exported commands, no code.
+#
+# The GUID is fixed rather than generated so that re-templating is idempotent
+# (a fresh GUID on every run would make the file change forever).
+@{
+    ModuleVersion = '1.0.0'
+    GUID = '4b9d8e17-6c30-4a5f-b2e8-0f7a13c95d64'
+    Author = 'declarative_access_windows'
+    Description = 'Carrier module for declarative_access_windows JEA role capabilities.'
+    PowerShellVersion = '5.1'
+    FunctionsToExport = @()
+    CmdletsToExport = @()
+    VariablesToExport = @()
+    AliasesToExport = @()
+}

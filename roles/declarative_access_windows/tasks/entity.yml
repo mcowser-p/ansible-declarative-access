@@ -1,0 +1,60 @@
+---
+# Resolve the single principal that receives every grant in this role.
+#
+# The entity is an APPLY-TIME decision, never a profile key: the sibling
+# repo's tools/check_profiles.py rejects declarative_access_windows_user and
+# _group inside a profile (WINDOWS_FORBIDDEN). The profile describes the
+# application; the playbook says who gets it.
+
+- name: Ensure exactly one of user or group is set
+  ansible.builtin.assert:
+    that:
+      - >-
+        (declarative_access_windows_user | default('') | length > 0)
+        != (declarative_access_windows_group | default('') | length > 0)
+    fail_msg: >-
+      Error: Exactly one of declarative_access_windows_user or
+      declarative_access_windows_group must be set (non-empty).
+    success_msg: "Exactly one entity is set, proceeding."
+
+- name: Ensure the profile name is set
+  ansible.builtin.assert:
+    that:
+      - declarative_access_windows_profile_name | default('') | length > 0
+    fail_msg: >-
+      Error: declarative_access_windows_profile_name must be set. It names
+      every rollback artifact this role writes (the NTFS SDDL snapshots, the
+      JEA role capability, the JEA endpoint), so an unnamed profile would
+      overwrite another profile's undo artifacts.
+    success_msg: "Profile name is set, proceeding."
+
+# Facts are global for the play - clear stale values from previous role
+# invocations first, exactly as the Linux role does for its ACL entity.
+- name: Clear stale entity facts from previous invocations
+  ansible.builtin.set_fact:
+    declarative_access_windows_entity: ""
+    declarative_access_windows_entity_type: ""
+
+- name: Set entity when user is given
+  ansible.builtin.set_fact:
+    declarative_access_windows_entity: "{{ declarative_access_windows_user }}"
+    declarative_access_windows_entity_type: "user"
+  when: declarative_access_windows_user | default('') | length > 0
+
+- name: Set entity when group is given
+  ansible.builtin.set_fact:
+    declarative_access_windows_entity: "{{ declarative_access_windows_group }}"
+    declarative_access_windows_entity_type: "group"
+  when: declarative_access_windows_group | default('') | length > 0
+
+- name: Debug resolved entity and enabled primitives
+  ansible.builtin.debug:
+    msg:
+      - "profile: {{ declarative_access_windows_profile_name }}"
+      - "entity: {{ declarative_access_windows_entity }} ({{ declarative_access_windows_entity_type }})"
+      - "wmsvc: {{ declarative_access_windows_wmsvc | bool }}"
+      - "feature_delegation: {{ declarative_access_windows_feature_delegation | bool }}"
+      - "service_sdset: {{ declarative_access_windows_service_sdset | bool }}"
+      - "jea: {{ declarative_access_windows_jea | bool }}"
+      - "snapshot_dir: {{ declarative_access_windows_snapshot_dir }}"
+  when: declarative_access_windows_debug | default(false) | bool

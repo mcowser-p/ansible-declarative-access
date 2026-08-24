@@ -23,11 +23,14 @@ license:
   - Apache-2.0
 tags:
   - linux
+  - windows
   - security
   - acl
   - sudoers
   - systemd
   - quadlet
+  - iis
+  - jea
   - infrastructure
 dependencies:
   # Runtime deps of the declarative_access role. community.docker is
@@ -36,6 +39,13 @@ dependencies:
   community.general: '>=6.0.0'
   ansible.posix: '>=1.5.0'
   microsoft.ad: '>=1.0.0'
+  # Runtime dep of the declarative_access_windows role. The floor is 2.2.0:
+  # that is the release where ansible.windows.win_acl gained certificate
+  # private-key ACL support (Cert:\LocalMachine\<store>\<thumbprint> paths),
+  # which the certkey primitive relies on. community.windows is not a
+  # dependency - the Windows role grants on IIS objects, it never creates
+  # them, so it needs nothing from that collection.
+  ansible.windows: '>=2.2.0'
 repository: https://github.com/mcowser-p/ansible-declarative-access
 homepage: https://github.com/mcowser-p/ansible-declarative-access
 issues: https://github.com/mcowser-p/ansible-declarative-access/issues

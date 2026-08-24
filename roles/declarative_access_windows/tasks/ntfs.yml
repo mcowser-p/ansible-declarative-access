@@ -1,0 +1,196 @@
+---
+# NTFS DACLs - the POSIX-ACL row of the Linux role.
+#
+#   _folders_modify    -> Modify,         (OI)(CI)
+#   _folders_read      -> ReadAndExecute, (OI)(CI)
+#   _deny_pool_write   -> DENY Write to `IIS AppPool\<pool>`
+#
+# (OI)(CI) - ContainerInherit + ObjectInherit - is the Windows analog of a
+# POSIX default ACL: content created under the folder inherits the grant, so
+# a team that deploys new files does not have to re-run this role. It is
+# cleaner than the POSIX version, which needs a separate default-ACL pass.
+#
+# The deny ACEs implement the config->ACL doctrine: the worker process must
+# not be able to rewrite the configuration that decides what the worker
+# process executes. Denying `IIS AppPool\<pool>` Write on web.config removes
+# the most common web-shell persistence path, at the cost of nothing - a
+# healthy site never writes its own web.config.
+#
+###########################################################################
+# WHY THE SNAPSHOT IS THE ROLLBACK
+#
+# ansible.windows.win_acl itself MERGES (it calls AddAccessRule on the
+# existing DACL), so a grant does not clobber the existing ACEs. But the
+# rollback story still needs a snapshot, for two reasons:
+#
+#   1. Cleanup removes ACEs by EXACT match - same identity, same rights, same
+#      inheritance, same propagation. An ACE that someone widened by hand
+#      afterwards no longer matches and will not be removed. `--tags cleanup`
+#      is therefore "remove what I added", not "put it back".
+#   2. Everything else that touches NTFS DACLs on Windows REPLACES rather
+#      than merges: `icacls /grant:r`, `Set-Acl` with a fresh
+#      DirectorySecurity, the Security tab's "Replace all child object
+#      permission entries". One of those run against a path this role
+#      granted on loses the original ACEs outright.
+#
+# So the pre-change SDDL captured below is the catastrophic-case undo:
+#   $acl = Get-Acl C:\path
+#   $acl.SetSecurityDescriptorSddlForm((Get-Content C:\bootstrap\dap-snapshots\<file>.sddl))
+#   Set-Acl C:\path $acl
+#
+# The snapshot is WRITE-ONCE per path. A second run must never overwrite the
+# pristine descriptor with the already-granted one.
+###########################################################################
+
+- name: ntfs
+  when: >-
+    declarative_access_windows_folders_modify | default([]) | length > 0
+    or declarative_access_windows_folders_read | default([]) | length > 0
+    or declarative_access_windows_deny_pool_write | default([]) | length > 0
+  block:
+    - name: ntfs - Validate pool identities exist for the deny list
+      ansible.builtin.assert:
+        that:
+          - declarative_access_windows_app_pools | default([]) | length > 0
+        fail_msg: >-
+          Error: declarative_access_windows_deny_pool_write is non-empty but
+          declarative_access_windows_app_pools is empty. The deny ACE targets
+          the pool virtual account `IIS AppPool\<pool>`, so the pool names are
+          required to know whom to deny.
+        success_msg: "App pools are set for the deny list, proceeding."
+      when: declarative_access_windows_deny_pool_write | default([]) | length > 0
+
+    - name: ntfs - Ensure the snapshot directory exists
+      ansible.windows.win_file:
+        path: "{{ declarative_access_windows_snapshot_dir }}"
+        state: directory
+
+    # MUST run before any win_acl task below.
+    - name: ntfs - Snapshot the SDDL of every target path
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Paths: >-
+            {{ ((declarative_access_windows_folders_modify | default([]))
+                + (declarative_access_windows_folders_read | default([]))
+                + (declarative_access_windows_deny_pool_write | default([]))) | unique }}
+          SnapshotDir: "{{ declarative_access_windows_snapshot_dir }}"
+          ProfileName: "{{ declarative_access_windows_profile_name }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][string[]]$Paths,
+              [Parameter(Mandatory = $true)][string]$SnapshotDir,
+              [Parameter(Mandatory = $true)][string]$ProfileName
+          )
+
+          if (-not (Test-Path -LiteralPath $SnapshotDir)) {
+              New-Item -Path $SnapshotDir -ItemType Directory -Force | Out-Null
+          }
+
+          $written = @()
+          $kept = @()
+          $missing = @()
+
+          foreach ($p in $Paths) {
+              if (-not (Test-Path -LiteralPath $p)) { $missing += $p; continue }
+
+              # <profile>-<sanitized-path>.sddl. ':' and '\' are illegal in a
+              # file name; spaces make the snapshot awkward to handle from a
+              # recovery shell. Very deep paths are truncated with a hash
+              # suffix so the file name stays under the 255-char limit while
+              # remaining unique.
+              $safe = ($p -replace '[\\/:*?"<>|]', '_') -replace '\s', '_'
+              $safe = $safe.Trim('_')
+              if ($safe.Length -gt 120) {
+                  $md5 = [System.Security.Cryptography.MD5]::Create()
+                  $hash = [System.BitConverter]::ToString(
+                      $md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($p))).Replace('-', '').Substring(0, 8)
+                  $safe = $safe.Substring(0, 110) + '_' + $hash
+              }
+              $file = Join-Path $SnapshotDir ("{0}-{1}.sddl" -f $ProfileName, $safe)
+
+              # WRITE-ONCE: never overwrite a pristine descriptor.
+              if (Test-Path -LiteralPath $file) { $kept += $file; continue }
+
+              (Get-Acl -LiteralPath $p).Sddl |
+                  Set-Content -LiteralPath $file -Encoding ASCII -NoNewline
+              $written += $file
+          }
+
+          $Ansible.Changed = ($written.Count -gt 0)
+          $Ansible.Result = @{ written = $written; kept = $kept; missing = $missing }
+      register: declarative_access_windows_ntfs_snapshot
+
+    - name: ntfs - Warn about targets that do not exist yet
+      ansible.builtin.debug:
+        msg: >-
+          No SDDL snapshot for {{ declarative_access_windows_ntfs_snapshot.result.missing | join(', ') }}
+          - the path does not exist. The grant below will fail on it, which is
+          the intended loud failure: a profile should not name paths the
+          install did not create.
+      when: declarative_access_windows_ntfs_snapshot.result.missing | default([]) | length > 0
+
+    ###########################################################################
+    # Grants
+    ###########################################################################
+    - name: ntfs - Grant Modify on content folders
+      ansible.windows.win_acl:
+        path: "{{ item }}"
+        user: "{{ declarative_access_windows_entity }}"
+        rights: "{{ declarative_access_windows_rights_folder_modify }}"
+        type: allow
+        state: present
+        inherit: "{{ declarative_access_windows_acl_inherit }}"
+        propagation: "{{ declarative_access_windows_acl_propagation }}"
+      loop: "{{ declarative_access_windows_folders_modify | default([]) }}"
+
+    - name: ntfs - Grant ReadAndExecute on read-only folders
+      ansible.windows.win_acl:
+        path: "{{ item }}"
+        user: "{{ declarative_access_windows_entity }}"
+        rights: "{{ declarative_access_windows_rights_folder_read }}"
+        type: allow
+        state: present
+        inherit: "{{ declarative_access_windows_acl_inherit }}"
+        propagation: "{{ declarative_access_windows_acl_propagation }}"
+      loop: "{{ declarative_access_windows_folders_read | default([]) }}"
+
+    ###########################################################################
+    # Deny ACEs for the pool identities
+    #
+    # win_acl resolves `IIS AppPool\<pool>` by reading the pool object's
+    # applicationPoolSid off the IIS: drive, which needs the WebAdministration
+    # module - shipped by the Web-Scripting-Tools feature. The module
+    # documents this requirement; ensuring the feature here turns a confusing
+    # "not a valid user or group" error into a satisfied prerequisite.
+    ###########################################################################
+    - name: ntfs - Ensure Web-Scripting-Tools is present for AppPool SID resolution
+      ansible.windows.win_feature:
+        name: Web-Scripting-Tools
+        state: present
+      when: declarative_access_windows_deny_pool_write | default([]) | length > 0
+
+    # The product of paths x pools: a deny for a pool that never touches the
+    # path costs nothing, and enumerating which pool owns which web.config
+    # would require re-deriving the site->pool->path mapping that the profile
+    # deliberately does not carry. Denying every declared pool is the
+    # conservative reading.
+    #
+    # Note on inherit: these entries are usually files (web.config), and
+    # win_acl forces inherit="None" on leaf paths itself, so passing the
+    # folder inheritance value is harmless and keeps apply/cleanup symmetric.
+    - name: ntfs - Deny Write to the pool identities on config paths
+      ansible.windows.win_acl:
+        path: "{{ item.0 }}"
+        user: "IIS AppPool\\{{ item.1 }}"
+        rights: "{{ declarative_access_windows_rights_pool_deny }}"
+        type: deny
+        state: present
+        inherit: "{{ declarative_access_windows_acl_inherit }}"
+        propagation: "{{ declarative_access_windows_acl_propagation }}"
+      loop: >-
+        {{ (declarative_access_windows_deny_pool_write | default([]))
+           | product(declarative_access_windows_app_pools | default([])) | list }}
+      loop_control:
+        label: "{{ item.0 }} deny IIS AppPool\\{{ item.1 }}"

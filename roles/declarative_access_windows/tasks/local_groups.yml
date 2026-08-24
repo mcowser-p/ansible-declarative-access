@@ -1,0 +1,42 @@
+---
+# Local group membership - the closest Windows has to pam_group, with one
+# honest difference the operator must know about.
+#
+# On Linux, pam_group.so adds the entity to a local group FOR THE DURATION OF
+# THE SSH SESSION; log out and the membership is gone. Windows has no
+# equivalent: the access token is built at logon from the account's group
+# memberships, so membership here is STANDING. Adding the entity to a group
+# takes effect at the entity's next logon and stays until it is removed.
+#
+# Two consequences worth stating in a runbook:
+#   * granting takes a logoff/logon to appear (`klist purge` for the
+#     Kerberos side of it),
+#   * revoking takes a FORCED logoff to take effect - an already-open session
+#     keeps the token it was issued.
+#
+# Typical members of this list for an IIS profile: IIS_IUSRS (read the site's
+# content the way the worker process does) and Remote Management Users (WMSVC
+# and WinRM/JEA connections).
+
+- name: local_groups
+  when: declarative_access_windows_local_groups | default([]) | length > 0
+  block:
+    - name: local_groups - Add the entity to each local group
+      ansible.windows.win_group_membership:
+        name: "{{ item }}"
+        members:
+          - "{{ declarative_access_windows_entity }}"
+        # `present` and NEVER `pure`: pure removes every member not listed,
+        # which on a builtin group like Administrators or IIS_IUSRS would
+        # evict accounts this profile knows nothing about.
+        state: present
+      loop: "{{ declarative_access_windows_local_groups }}"
+
+    - name: local_groups - Debug group membership
+      ansible.builtin.debug:
+        msg: >-
+          {{ declarative_access_windows_entity }} is now a member of
+          {{ declarative_access_windows_local_groups | join(', ') }}.
+          Membership is standing, not session-scoped: it appears at the
+          entity's next logon.
+      when: declarative_access_windows_debug | default(false) | bool

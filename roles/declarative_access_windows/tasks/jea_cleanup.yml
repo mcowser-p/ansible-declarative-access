@@ -1,0 +1,79 @@
+---
+# Unregister the JEA endpoint and remove this profile's capability files.
+#
+# Runs only with --tags cleanup, and needs the same profile name (which names
+# both the endpoint and the role capability file).
+#
+# Unregistering is what actually revokes access: without a registered session
+# configuration there is nothing for the entity to connect to, whatever is
+# left on disk. The files are removed too so a later re-register cannot pick
+# up a stale capability.
+#
+# The carrier MODULE directory is deliberately left in place - it is shared
+# by every profile on the host, and removing it would take a sibling
+# profile's role capability with it. It contains no grant on its own.
+#
+# Transcripts are never deleted. They are the audit trail of what the entity
+# actually ran; a revocation is not a reason to destroy it.
+
+- name: jea cleanup
+  block:
+    - name: jea cleanup - Resolve the endpoint name
+      ansible.builtin.set_fact:
+        declarative_access_windows_jea_endpoint: >-
+          {{ declarative_access_windows_jea_endpoint_name
+             | default(declarative_access_windows_profile_name, true) }}
+
+    - name: jea cleanup - Unregister the session configuration
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Name: "{{ declarative_access_windows_jea_endpoint }}"
+          RestartWinRM: "{{ declarative_access_windows_jea_restart_winrm | bool }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][string]$Name,
+              [string]$RestartWinRM = 'false'
+          )
+
+          # String + explicit conversion: a [bool] parameter would cast the
+          # STRING 'False' to $true. See tasks/jea.yml.
+          $restart = [System.Convert]::ToBoolean($RestartWinRM)
+
+          $existing = Get-PSSessionConfiguration -Name $Name -ErrorAction SilentlyContinue
+          if (-not $existing) {
+              $Ansible.Changed = $false
+              $Ansible.Result = @{ endpoint = $Name; action = 'not registered' }
+          }
+          else {
+              $unregParams = @{ Name = $Name; Force = $true }
+              if (-not $restart) { $unregParams['NoServiceRestart'] = $true }
+              Unregister-PSSessionConfiguration @unregParams
+
+              $Ansible.Changed = $true
+              $Ansible.Result = @{
+                  endpoint = $Name
+                  action = 'unregistered'
+                  winrm_restarted = $restart
+              }
+          }
+      register: declarative_access_windows_jea_unregister
+
+    - name: jea cleanup - Remove this profile's capability and session files
+      ansible.windows.win_file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - >-
+          {{ declarative_access_windows_jea_module_root }}\RoleCapabilities\{{
+          declarative_access_windows_profile_name }}.psrc
+        - >-
+          {{ declarative_access_windows_jea_module_root }}\{{
+          declarative_access_windows_profile_name }}.pssc
+
+    - name: jea cleanup - Debug unregistration
+      ansible.builtin.debug:
+        var: declarative_access_windows_jea_unregister.result
+      when: declarative_access_windows_debug | default(false) | bool
+  # Runs only when --tags cleanup is applied

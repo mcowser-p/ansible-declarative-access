@@ -1,0 +1,86 @@
+---
+# Revoke the IIS Manager connection grants this profile made.
+#
+# Runs only with --tags cleanup, and needs the same entity and the same
+# declarative_access_windows_sites list the apply side used - in practice:
+# re-run the same playbook / vars file with --tags cleanup.
+#
+# Deliberately LEFT in place: the Web-Mgmt-Service feature, the two registry
+# values, and the WMSVC service itself. They are host posture shared by every
+# profile on the server, not this profile's grant - tearing them down here
+# would break a sibling profile's delegated connections. Revoking the
+# connection grant is what actually removes this entity's access; without a
+# grant the entity cannot connect to any site.
+#
+# To decommission WMSVC entirely (all profiles, deliberate):
+#   Set-ItemProperty HKLM:\SOFTWARE\Microsoft\WebManagement\Server EnableRemoteManagement 0
+#   Stop-Service WMSVC; Set-Service WMSVC -StartupType Disabled
+
+- name: wmsvc cleanup
+  when: declarative_access_windows_sites | default([]) | length > 0
+  block:
+    - name: wmsvc cleanup - Revoke the entity's IIS Manager connection per site
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Entity: "{{ declarative_access_windows_entity }}"
+          Sites: "{{ declarative_access_windows_sites }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][string]$Entity,
+              [Parameter(Mandatory = $true)][string[]]$Sites
+          )
+
+          $inetsrv = Join-Path $env:windir 'system32\inetsrv'
+          $mgmtDll = Join-Path $inetsrv 'Microsoft.Web.Management.dll'
+          if (-not (Test-Path -LiteralPath $mgmtDll)) {
+              # WMSVC was never installed on this host - nothing to revoke.
+              $Ansible.Changed = $false
+              $Ansible.Result = @{ revoked = @(); note = 'Web-Mgmt-Service not installed' }
+          }
+          else {
+              [void][System.Reflection.Assembly]::LoadFrom($mgmtDll)
+              $admDll = Join-Path $inetsrv 'Microsoft.Web.Administration.dll'
+              if (Test-Path -LiteralPath $admDll) { [void][System.Reflection.Assembly]::LoadFrom($admDll) }
+
+              $adminConfig = Join-Path $inetsrv 'config\administration.config'
+
+              function Get-ExistingGrants {
+                  param([string]$SitePath)
+                  try {
+                      $users = [Microsoft.Web.Management.Server.ManagementAuthorization]::GetAuthorizedUsers(
+                          $SitePath, $false, 0, [int]::MaxValue)
+                      return @($users | ForEach-Object { $_.Name })
+                  }
+                  catch {
+                      if (-not (Test-Path -LiteralPath $adminConfig)) { return @() }
+                      $xml = [xml](Get-Content -LiteralPath $adminConfig -Raw)
+                      return @($xml.SelectNodes('//authorization/add') |
+                          Where-Object { $_.path -eq $SitePath } |
+                          ForEach-Object { $_.name })
+                  }
+              }
+
+              $revoked = @()
+              $absent = @()
+              foreach ($site in $Sites) {
+                  $existing = Get-ExistingGrants -SitePath $site
+                  if (@($existing | Where-Object { $_ -eq $Entity }).Count -eq 0) {
+                      $absent += $site
+                      continue
+                  }
+                  [Microsoft.Web.Management.Server.ManagementAuthorization]::Revoke($Entity, $site)
+                  $revoked += $site
+              }
+
+              $Ansible.Changed = ($revoked.Count -gt 0)
+              $Ansible.Result = @{ revoked = $revoked; already_absent = $absent }
+          }
+      register: declarative_access_windows_wmsvc_revoke
+
+    - name: wmsvc cleanup - Debug revoked grants
+      ansible.builtin.debug:
+        var: declarative_access_windows_wmsvc_revoke.result
+      when: declarative_access_windows_debug | default(false) | bool
+  # Runs only when --tags cleanup is applied

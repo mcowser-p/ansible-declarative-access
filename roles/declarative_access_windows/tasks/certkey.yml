@@ -1,0 +1,160 @@
+---
+# Certificate private-key Read grants - IIS Manager's "Manage Private Keys".
+#
+# A team that owns a site's TLS also has to be able to bind that site's
+# certificate, and binding requires READ on the certificate's private key.
+# It does NOT require the ability to export the key, and this role never
+# grants it: declarative_access_windows_rights_cert_key is Read, and
+# FullControl is deliberately not offered as a default. FullControl on a key
+# ACL is what lets a principal re-mark a non-exportable key exportable, at
+# which point the "non-exportable import" control is decorative.
+#
+###########################################################################
+# MECHANISM NOTE (a deliberate deviation worth stating)
+#
+# The obvious implementation is to locate the key FILE and add an NTFS ACE:
+#   CNG   %ProgramData%\Microsoft\Crypto\Keys\<UniqueName>
+#   CAPI  %ProgramData%\Microsoft\Crypto\RSA\MachineKeys\<UniqueKeyContainerName>
+#
+# That is right for CAPI, where the file DACL *is* the enforcement point, but
+# only half right for CNG, where the key's security descriptor is an NCrypt
+# key property ("Security Descr") and the file DACL is a second, separate
+# gate. Getting both consistently right by hand is exactly the kind of thing
+# that silently half-works.
+#
+# ansible.windows.win_acl already does it properly: given a `Cert:` path it
+# acquires the certificate's private key with CryptAcquireCertificatePrivateKey
+# and sets the descriptor through NCryptSetProperty (CNG) or
+# CryptSetProvParam (CAPI), whichever provider the key actually uses. So the
+# grant below uses the module's certificate support, and the resolver still
+# reports the key file path for diagnostics and for the record - that is what
+# you inspect when a bind fails.
+###########################################################################
+
+- name: certkey
+  when: declarative_access_windows_cert_keys | default([]) | length > 0
+  block:
+    - name: certkey - Resolve certificates and their private key files
+      ansible.windows.win_powershell:
+        error_action: stop
+        # win_powershell serialises $Ansible.Result to depth 2 by
+        # default, which would flatten the nested report below into
+        # strings and break attribute access on the Ansible side.
+        depth: 4
+        parameters:
+          CertKeys: "{{ declarative_access_windows_cert_keys }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][object[]]$CertKeys
+          )
+
+          $results = @()
+          foreach ($entry in $CertKeys) {
+              $store = if ($entry.store) { $entry.store } else { 'My' }
+              $storePath = "Cert:\LocalMachine\$store"
+              if (-not (Test-Path -LiteralPath $storePath)) {
+                  throw "certificate store '$storePath' does not exist"
+              }
+              $candidates = @(Get-ChildItem -LiteralPath $storePath)
+
+              if ($entry.thumbprint) {
+                  # Thumbprints copied out of the MMC carry spaces and an
+                  # invisible left-to-right mark; normalise before comparing.
+                  $tp = ($entry.thumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+                  $match = @($candidates | Where-Object { $_.Thumbprint -eq $tp })
+                  $selector = "thumbprint $tp"
+              }
+              elseif ($entry.subject) {
+                  $match = @($candidates | Where-Object { $_.Subject -like "*$($entry.subject)*" })
+                  $selector = "subject like '*$($entry.subject)*'"
+              }
+              else {
+                  throw "each declarative_access_windows_cert_keys entry needs 'thumbprint' or 'subject'"
+              }
+
+              if ($match.Count -eq 0) {
+                  throw "no certificate in $storePath matches $selector"
+              }
+              if ($match.Count -gt 1) {
+                  # Never guess which certificate a grant was meant for -
+                  # subject matching is convenient but renewal leaves the old
+                  # certificate in the store with the same subject.
+                  throw ("$selector matched $($match.Count) certificates in $storePath " +
+                         "(thumbprints: $(($match | ForEach-Object { $_.Thumbprint }) -join ', ')) " +
+                         "- narrow it with an explicit thumbprint")
+              }
+
+              $cert = $match[0]
+              if (-not $cert.HasPrivateKey) {
+                  throw "certificate $($cert.Thumbprint) in $storePath has no private key"
+              }
+
+              # Diagnostic only - the grant itself goes through the Cert:
+              # provider (see the mechanism note in the task file).
+              $keyFile = $null
+              $provider = 'unknown'
+              # RSA and ECDSA have separate extension classes; a site cert may
+              # be either, so both are tried before the CAPI fallback. A CNG
+              # key exposes .Key.UniqueName, which IS the file name under
+              # ProgramData\Microsoft\Crypto\Keys for a machine key.
+              $cngKey = $null
+              try {
+                  $cngKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+              }
+              catch { $cngKey = $null }
+              if (-not ($cngKey -and $cngKey.PSObject.Properties.Name -contains 'Key')) {
+                  try {
+                      $cngKey = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($cert)
+                  }
+                  catch { $cngKey = $null }
+              }
+              if ($cngKey -and $cngKey.PSObject.Properties.Name -contains 'Key' -and $cngKey.Key.UniqueName) {
+                  $provider = 'CNG'
+                  $keyFile = Join-Path $env:ProgramData "Microsoft\Crypto\Keys\$($cngKey.Key.UniqueName)"
+              }
+              if (-not $keyFile) {
+                  try {
+                      $capi = $cert.PrivateKey
+                      if ($capi -and $capi.CspKeyContainerInfo) {
+                          $provider = 'CAPI'
+                          $keyFile = Join-Path $env:ProgramData `
+                              "Microsoft\Crypto\RSA\MachineKeys\$($capi.CspKeyContainerInfo.UniqueKeyContainerName)"
+                      }
+                  }
+                  catch { }
+              }
+
+              $results += [ordered]@{
+                  cert_path  = "Cert:\LocalMachine\$store\$($cert.Thumbprint)"
+                  thumbprint = $cert.Thumbprint
+                  subject    = $cert.Subject
+                  store      = $store
+                  not_after  = $cert.NotAfter.ToString('o')
+                  provider   = $provider
+                  key_file   = $keyFile
+              }
+          }
+
+          # Read-only resolver: win_powershell defaults Changed to $true.
+          $Ansible.Changed = $false
+          $Ansible.Result = @{ certificates = $results }
+      register: declarative_access_windows_certkey_resolved
+
+    - name: certkey - Debug resolved certificates
+      ansible.builtin.debug:
+        var: declarative_access_windows_certkey_resolved.result.certificates
+      when: declarative_access_windows_debug | default(false) | bool
+
+    # win_acl on a Cert: path takes Read or FullControl. Read is the whole
+    # point; see the header. `inherit` and `propagation` are not passed -
+    # a key ACL has no children to inherit to.
+    - name: certkey - Grant Read on the private key
+      ansible.windows.win_acl:
+        path: "{{ item.cert_path }}"
+        user: "{{ declarative_access_windows_entity }}"
+        rights: "{{ declarative_access_windows_rights_cert_key }}"
+        type: allow
+        state: present
+      loop: "{{ declarative_access_windows_certkey_resolved.result.certificates }}"
+      loop_control:
+        label: "{{ item.thumbprint }} ({{ item.subject }})"

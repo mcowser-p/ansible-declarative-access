@@ -1,0 +1,95 @@
+---
+# Remove the NTFS ACEs this profile added (the reverse of ntfs.yml).
+#
+# Runs only with --tags cleanup, and needs the same entity, the same grant
+# lists, and the same rights variables the apply side used - win_acl removes
+# an ACE by EXACT match (identity, rights, type, inheritance, propagation),
+# so a cleanup run with different rights values removes nothing.
+#
+# THIS IS "REMOVE WHAT I ADDED", NOT "PUT IT BACK". If someone widened an ACE
+# by hand after the grant, it no longer matches and survives cleanup; if some
+# other tool REPLACED the DACL (icacls /grant:r, Set-Acl with a fresh
+# descriptor, "Replace all child object permission entries"), the original
+# ACEs are already gone and no ACE-level cleanup can recover them.
+#
+# For those cases the pre-change snapshot ntfs.yml wrote is the rollback:
+#
+#   $sddl = Get-Content 'C:\bootstrap\dap-snapshots\<profile>-<path>.sddl' -Raw
+#   $acl  = Get-Acl 'C:\path'
+#   $acl.SetSecurityDescriptorSddlForm($sddl)
+#   Set-Acl 'C:\path' $acl
+#
+# The snapshots are deliberately NOT deleted here. They are the only record
+# of the pre-grant state and cost a few hundred bytes each; a cleanup that
+# removed them would take the undo with it.
+
+- name: ntfs cleanup
+  when: >-
+    declarative_access_windows_folders_modify | default([]) | length > 0
+    or declarative_access_windows_folders_read | default([]) | length > 0
+    or declarative_access_windows_deny_pool_write | default([]) | length > 0
+  block:
+    # Paths that no longer exist are skipped quietly - the install may
+    # already be gone - matching setfacl_cleanup.yml on the Linux side.
+    - name: ntfs cleanup - Stat every target path
+      ansible.windows.win_stat:
+        path: "{{ item }}"
+      register: declarative_access_windows_ntfs_cleanup_stats
+      loop: >-
+        {{ ((declarative_access_windows_folders_modify | default([]))
+            + (declarative_access_windows_folders_read | default([]))
+            + (declarative_access_windows_deny_pool_write | default([]))) | unique }}
+
+    - name: ntfs cleanup - Build the set of paths that still exist
+      ansible.builtin.set_fact:
+        declarative_access_windows_ntfs_cleanup_existing: >-
+          {{ declarative_access_windows_ntfs_cleanup_stats.results
+             | selectattr('stat.exists')
+             | map(attribute='item') | list }}
+
+    - name: ntfs cleanup - Remove the Modify grants
+      ansible.windows.win_acl:
+        path: "{{ item }}"
+        user: "{{ declarative_access_windows_entity }}"
+        rights: "{{ declarative_access_windows_rights_folder_modify }}"
+        type: allow
+        state: absent
+        inherit: "{{ declarative_access_windows_acl_inherit }}"
+        propagation: "{{ declarative_access_windows_acl_propagation }}"
+      loop: >-
+        {{ (declarative_access_windows_folders_modify | default([]))
+           | intersect(declarative_access_windows_ntfs_cleanup_existing) }}
+
+    - name: ntfs cleanup - Remove the ReadAndExecute grants
+      ansible.windows.win_acl:
+        path: "{{ item }}"
+        user: "{{ declarative_access_windows_entity }}"
+        rights: "{{ declarative_access_windows_rights_folder_read }}"
+        type: allow
+        state: absent
+        inherit: "{{ declarative_access_windows_acl_inherit }}"
+        propagation: "{{ declarative_access_windows_acl_propagation }}"
+      loop: >-
+        {{ (declarative_access_windows_folders_read | default([]))
+           | intersect(declarative_access_windows_ntfs_cleanup_existing) }}
+
+    # Removing the pool deny ACEs is a WIDENING operation: afterwards the
+    # worker process can write its own config again. It is done here for
+    # symmetry - `--tags cleanup` means "return this host to its pre-profile
+    # state" - but consider keeping the denies in place if the site stays.
+    - name: ntfs cleanup - Remove the pool identity deny ACEs
+      ansible.windows.win_acl:
+        path: "{{ item.0 }}"
+        user: "IIS AppPool\\{{ item.1 }}"
+        rights: "{{ declarative_access_windows_rights_pool_deny }}"
+        type: deny
+        state: absent
+        inherit: "{{ declarative_access_windows_acl_inherit }}"
+        propagation: "{{ declarative_access_windows_acl_propagation }}"
+      loop: >-
+        {{ (declarative_access_windows_deny_pool_write | default([]))
+           | intersect(declarative_access_windows_ntfs_cleanup_existing)
+           | product(declarative_access_windows_app_pools | default([])) | list }}
+      loop_control:
+        label: "{{ item.0 }} deny IIS AppPool\\{{ item.1 }}"
+  # Runs only when --tags cleanup is applied
