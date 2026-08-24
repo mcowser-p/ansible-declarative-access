@@ -1,0 +1,165 @@
+---
+# defaults file for declarative_access_windows
+#
+# Windows counterpart of the declarative_access role. Same house rules:
+# every role variable carries the `declarative_access_windows_` prefix
+# (Ansible Galaxy / ansible-lint var-naming[no-role-prefix] standard), every
+# grant list defaults to [], and the entity receiving access is EXACTLY ONE
+# of declarative_access_windows_user / declarative_access_windows_group,
+# passed by the calling playbook — never defaulted here.
+#
+# WHY THE TOGGLES ARE ALL false: unlike the Linux contract, a Windows access
+# PROFILE carries no booleans at all (the sibling repo's
+# tools/check_profiles.py WINDOWS_ALLOWED set is data keys only). The profile
+# states what the application needs; the operator decides which mechanisms to
+# switch on at apply time. Defaulting every toggle to false means applying a
+# profile without them is a no-op — the safe direction, because three of
+# these primitives change server-wide posture: WMSVC opens an HTTPS listener
+# on :8172, sdset rewrites a service's security descriptor, and JEA registers
+# a PowerShell remoting endpoint.
+
+###########################################################################
+# Feature toggles — set to true in your playbook to enable
+###########################################################################
+# WMSVC + per-site IIS Manager connections (the vendor-native delegation
+# path). Installs a Windows feature and opens a listener, hence opt-in.
+declarative_access_windows_wmsvc: false
+# Feature delegation: which system.webServer sections a delegated site
+# connection may write. Edits applicationHost.config, hence opt-in.
+declarative_access_windows_feature_delegation: false
+# sc.exe sdset service grants. Rewrites a service DACL, hence opt-in.
+declarative_access_windows_service_sdset: false
+# JEA endpoint for the operations IIS delegation cannot express.
+declarative_access_windows_jea: false
+
+# General
+declarative_access_windows_debug: false
+
+###########################################################################
+# Profile identity
+###########################################################################
+# Names every rollback artifact this role writes (NTFS SDDL snapshots, the
+# JEA role capability, the JEA endpoint). Deliberately empty by default and
+# asserted non-empty in entity.yml: an unnamed profile would silently
+# overwrite another profile's undo artifacts.
+declarative_access_windows_profile_name: ""
+
+###########################################################################
+# Grant lists — all supplied by the access profile
+###########################################################################
+# IIS site names the entity may manage through IIS Manager (wmsvc.yml), and
+# the ValidateSet baked into the JEA site functions.
+declarative_access_windows_sites: []
+# Application pool names. Drives the JEA recycle functions' ValidateSet and
+# the `IIS AppPool\<pool>` identities used by the deny ACEs.
+declarative_access_windows_app_pools: []
+# Windows services the entity may start/stop/query (service_sdset.yml),
+# e.g. [W3SVC, WAS].
+declarative_access_windows_services: []
+# Feature delegation, e.g.
+#   declarative_access_windows_delegation:
+#     read_write: ['system.webServer/defaultDocument']
+#     read_only:  ['system.webServer/handlers']
+declarative_access_windows_delegation: {}
+# NTFS grants. Folders get (OI)(CI) inheritance — the analog of a POSIX
+# default ACL — so new content inherits the grant.
+declarative_access_windows_folders_modify: []
+declarative_access_windows_folders_read: []
+# Paths the application pool identity must NOT be able to write. The
+# config→ACL doctrine: a service that cannot rewrite its own config cannot
+# be used to persist a web shell through it.
+declarative_access_windows_deny_pool_write: []
+# Certificate private keys the entity may read, e.g.
+#   - {thumbprint: 'AABB…', store: 'My'}
+#   - {subject: 'CN=app.example.com', store: 'My'}
+# Read only — never export.
+declarative_access_windows_cert_keys: []
+# Event log channels the grant is for. Non-empty means "put the entity in
+# Event Log Readers" — see event_channels.yml for why the coarse group is
+# the default rather than per-channel wevtutil ACLs.
+declarative_access_windows_event_channels: []
+# JEA proxy functions to expose. Must be names from the vetted catalogue in
+# templates/jea_role_capability.psrc.j2 — an unknown name fails loudly
+# rather than registering an endpoint that does nothing.
+declarative_access_windows_jea_functions: []
+# Local groups the entity is placed into. Standing membership, not
+# session-scoped: Windows builds the token at logon, so a change needs a
+# logoff (there is no pam_group analog).
+declarative_access_windows_local_groups: []
+# Ownership entries: {path, owner} (optional `recurse`, default false).
+declarative_access_windows_ownership: []
+
+###########################################################################
+# Rollback snapshots
+#
+# NTFS DACLs and service security descriptors have no `--tags cleanup`
+# analog that can restore an arbitrary prior state: cleanup removes the
+# exact ACEs this role added, which is not the same as "put it back".
+# The snapshots taken before the first change ARE the rollback.
+###########################################################################
+declarative_access_windows_snapshot_dir: 'C:\bootstrap\dap-snapshots'
+
+###########################################################################
+# NTFS rights — what each grant list applies (mirrors the Linux role's
+# declarative_access_acl_* permission strings)
+###########################################################################
+declarative_access_windows_rights_folder_modify: "Modify"
+declarative_access_windows_rights_folder_read: "ReadAndExecute"
+# Denied to the pool identity on declarative_access_windows_deny_pool_write.
+declarative_access_windows_rights_pool_deny: "Write"
+# Read on the certificate private key. NEVER FullControl: FullControl on a
+# key ACL is what lets a principal re-mark the key exportable.
+declarative_access_windows_rights_cert_key: "Read"
+# (OI)(CI) — object + container inherit. win_acl forces "None" on leaf
+# paths itself, so the same value is safe for the file-valued lists.
+declarative_access_windows_acl_inherit: "ContainerInherit, ObjectInherit"
+declarative_access_windows_acl_propagation: "None"
+
+###########################################################################
+# Service control rights granted per entry in declarative_access_windows_services
+#
+# The analog of declarative_access_systemctl_actions. Names map to the
+# SERVICE_* access mask bits in winsvc.h (see service_sdset.yml). The
+# default set is start/stop/query only — ChangeConfig (DC) is deliberately
+# absent, because rewriting a service's ImagePath is root-equivalent.
+###########################################################################
+declarative_access_windows_service_rights:
+  - QueryConfig
+  - QueryStatus
+  - EnumerateDependents
+  - Start
+  - Stop
+  - Interrogate
+  - ReadControl
+
+###########################################################################
+# WMSVC
+###########################################################################
+declarative_access_windows_wmsvc_service: "WMSVC"
+declarative_access_windows_wmsvc_registry_path: 'HKLM:\SOFTWARE\Microsoft\WebManagement\Server'
+
+###########################################################################
+# Feature delegation
+###########################################################################
+# What a section's OverrideMode is reset to at cleanup when no snapshot
+# value was recorded. Deny is the shipped default for most (not all)
+# system.webServer sections — see delegation_cleanup.yml.
+declarative_access_windows_delegation_cleanup_mode: "Deny"
+
+###########################################################################
+# Event channels
+###########################################################################
+declarative_access_windows_event_log_readers_group: "Event Log Readers"
+
+###########################################################################
+# JEA
+###########################################################################
+declarative_access_windows_jea_module_name: "DeclarativeAccessJEA"
+# Endpoint (session configuration) name. Empty = use the profile name.
+declarative_access_windows_jea_endpoint_name: ""
+declarative_access_windows_jea_transcript_dir: 'C:\bootstrap\dap-jea-transcripts'
+# Register-PSSessionConfiguration restarts the WinRM service, which drops
+# the connection when Ansible itself is connected over WinRM. The role
+# registers with -NoServiceRestart by default; set this true only when the
+# connection is SSH (or you accept losing the session).
+declarative_access_windows_jea_restart_winrm: false

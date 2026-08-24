@@ -1,0 +1,184 @@
+#jinja2: trim_blocks: True, lstrip_blocks: False
+# {{ ansible_managed }}
+#
+# JEA role capability for the "{{ declarative_access_windows_profile_name }}" access profile.
+#
+# The catalogue below is CLOSED: tasks/jea.yml asserts that every name in
+# declarative_access_windows_jea_functions appears here, so a typo fails the
+# play instead of registering an endpoint that silently exposes nothing.
+#
+# Every function is a proxy over exactly one operation, with the site and
+# pool names from the profile baked in as a ValidateSet. The session runs in
+# NoLanguage mode (SessionType = RestrictedRemoteServer in the .pssc), so a
+# caller cannot construct an argument the ValidateSet would not accept.
+#
+# Function bodies run in an unconstrained module scope - that is by design in
+# JEA, and it is why the bodies below take no free-form input: every
+# parameter is constrained by a ValidateSet or a ValidatePattern.
+@{
+    GUID = 'a3f6b0c2-5d41-4e9a-9c17-6e2b8d4f1a70'
+    Author = 'declarative_access_windows'
+    Description = 'Operations IIS Manager delegation cannot express, scoped to the {{ declarative_access_windows_profile_name }} profile.'
+    CompanyName = 'Unknown'
+
+    # No cmdlets, no external commands, no providers are exposed directly.
+    # Everything the caller can reach is a function defined below.
+    VisibleCmdlets = @()
+    VisibleExternalCommands = @()
+    VisibleProviders = @()
+    VisibleFunctions = @({% for f in declarative_access_windows_jea_functions %}'{{ f | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})
+
+    FunctionDefinitions = @(
+{% if 'Restart-AppPool' in declarative_access_windows_jea_functions %}
+        @{
+            # The single most common day-2 operation, and the one a delegated
+            # site connection can never perform: Application Pools is a
+            # server-scope node in IIS's model.
+            Name = 'Restart-AppPool'
+            ScriptBlock = {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [ValidateSet({% for p in declarative_access_windows_app_pools %}'{{ p | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})]
+                    [string]$Name
+                )
+                Import-Module WebAdministration -ErrorAction Stop
+                Restart-WebAppPool -Name $Name
+            }
+        }
+{% endif %}
+{% if 'Start-AppPool' in declarative_access_windows_jea_functions %}
+        @{
+            Name = 'Start-AppPool'
+            ScriptBlock = {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [ValidateSet({% for p in declarative_access_windows_app_pools %}'{{ p | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})]
+                    [string]$Name
+                )
+                Import-Module WebAdministration -ErrorAction Stop
+                Start-WebAppPool -Name $Name
+            }
+        }
+{% endif %}
+{% if 'Stop-AppPool' in declarative_access_windows_jea_functions %}
+        @{
+            Name = 'Stop-AppPool'
+            ScriptBlock = {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [ValidateSet({% for p in declarative_access_windows_app_pools %}'{{ p | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})]
+                    [string]$Name
+                )
+                Import-Module WebAdministration -ErrorAction Stop
+                Stop-WebAppPool -Name $Name
+            }
+        }
+{% endif %}
+{% if 'Get-AppPoolStatus' in declarative_access_windows_jea_functions %}
+        @{
+            Name = 'Get-AppPoolStatus'
+            ScriptBlock = {
+                Import-Module WebAdministration -ErrorAction Stop
+                $scoped = @({% for p in declarative_access_windows_app_pools %}'{{ p | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})
+                Get-ChildItem IIS:\AppPools |
+                    Where-Object { $scoped -contains $_.Name } |
+                    Select-Object Name, State
+            }
+        }
+{% endif %}
+{% if 'Start-Site' in declarative_access_windows_jea_functions %}
+        @{
+            Name = 'Start-Site'
+            ScriptBlock = {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [ValidateSet({% for s in declarative_access_windows_sites %}'{{ s | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})]
+                    [string]$Name
+                )
+                Import-Module WebAdministration -ErrorAction Stop
+                Start-Website -Name $Name
+            }
+        }
+{% endif %}
+{% if 'Stop-Site' in declarative_access_windows_jea_functions %}
+        @{
+            Name = 'Stop-Site'
+            ScriptBlock = {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [ValidateSet({% for s in declarative_access_windows_sites %}'{{ s | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})]
+                    [string]$Name
+                )
+                Import-Module WebAdministration -ErrorAction Stop
+                Stop-Website -Name $Name
+            }
+        }
+{% endif %}
+{% if 'Restart-Site' in declarative_access_windows_jea_functions %}
+        @{
+            Name = 'Restart-Site'
+            ScriptBlock = {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [ValidateSet({% for s in declarative_access_windows_sites %}'{{ s | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})]
+                    [string]$Name
+                )
+                Import-Module WebAdministration -ErrorAction Stop
+                Stop-Website -Name $Name
+                Start-Website -Name $Name
+            }
+        }
+{% endif %}
+{% if 'Get-SiteStatus' in declarative_access_windows_jea_functions %}
+        @{
+            Name = 'Get-SiteStatus'
+            ScriptBlock = {
+                Import-Module WebAdministration -ErrorAction Stop
+                $scoped = @({% for s in declarative_access_windows_sites %}'{{ s | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})
+                Get-Website |
+                    Where-Object { $scoped -contains $_.Name } |
+                    Select-Object Name, Id, State, PhysicalPath, ApplicationPool
+            }
+        }
+{% endif %}
+{% if 'Bind-SiteCert' in declarative_access_windows_jea_functions %}
+        @{
+            # Bindings and http.sys SSL binds are server-scope, so a delegated
+            # site connection cannot rebind a renewed certificate. This is the
+            # narrowest thing that can: it rebinds an EXISTING https binding
+            # on a site named in the profile to a certificate already present
+            # in LocalMachine\My. It never creates a binding, never touches
+            # another site, and never imports or exports key material.
+            Name = 'Bind-SiteCert'
+            ScriptBlock = {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [ValidateSet({% for s in declarative_access_windows_sites %}'{{ s | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})]
+                    [string]$Site,
+
+                    [Parameter(Mandatory = $true)]
+                    [ValidatePattern('^[0-9A-Fa-f]{40}$')]
+                    [string]$Thumbprint
+                )
+                Import-Module WebAdministration -ErrorAction Stop
+
+                $tp = $Thumbprint.ToUpperInvariant()
+                $cert = Get-ChildItem Cert:\LocalMachine\My |
+                    Where-Object { $_.Thumbprint -eq $tp }
+                if (-not $cert) {
+                    throw "certificate $tp is not in LocalMachine\My"
+                }
+
+                $bindings = @(Get-WebBinding -Name $Site -Protocol https)
+                if ($bindings.Count -eq 0) {
+                    throw "site '$Site' has no https binding to rebind - create the binding first"
+                }
+                foreach ($b in $bindings) {
+                    $b.AddSslCertificate($tp, 'My')
+                }
+                Get-WebBinding -Name $Site -Protocol https
+            }
+        }
+{% endif %}
+    )
+}

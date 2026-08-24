@@ -1,0 +1,190 @@
+---
+# Service security descriptors - the sudoers-verbs row of the Linux role.
+#
+# IIS Manager delegation stops at the site object. Restarting W3SVC or WAS,
+# like recycling a pool, is server-scope, so a delegated connection can never
+# do it. `sc.exe sdset` is the in-box mechanism that can: it grants named
+# principals specific SERVICE_* rights on a specific service, which is
+# exactly "systemctl start/stop/status <unit> for this group" expressed in
+# the Windows object model.
+#
+# Granting whole-service control is CORRECT here and only here: our support
+# boundary is one team per host. On a shared host, drop this primitive and
+# widen the JEA endpoint instead - JEA can scope to a site, a service
+# descriptor cannot.
+#
+###########################################################################
+# THE SNAPSHOT IS THE ONLY UNDO
+#
+# There is no `--tags cleanup` analog for a security descriptor. `sdset`
+# takes a complete descriptor and replaces the one on the service - there is
+# no "remove this one ACE" verb in sc.exe. So:
+#
+#   1. `sc.exe sdshow <svc>` is captured to <snapshot_dir>\<svc>.sddl BEFORE
+#      anything is written, WRITE-ONCE (a second run must not overwrite the
+#      pristine descriptor with the already-granted one);
+#   2. the grant APPENDS an allow ACE to the parsed descriptor and writes the
+#      result back - it never composes a descriptor from scratch. Composing
+#      one from scratch is how people lock SYSTEM or the SCM out of their own
+#      service and end up rebuilding the host;
+#   3. cleanup restores the snapshot verbatim.
+#
+# Only the DACL is written. The descriptor is re-emitted with
+# AccessControlSections::Access, so the SACL is left exactly as it was -
+# writing a SACL through sdset needs SeSecurityPrivilege enabled in the
+# token, which is a failure mode this role has no reason to risk.
+###########################################################################
+
+- name: service_sdset
+  when:
+    - declarative_access_windows_service_sdset | default(false) | bool
+    - declarative_access_windows_services | default([]) | length > 0
+  block:
+    - name: service_sdset - Ensure the snapshot directory exists
+      ansible.windows.win_file:
+        path: "{{ declarative_access_windows_snapshot_dir }}"
+        state: directory
+
+    - name: service_sdset - Snapshot and append the service grants
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Entity: "{{ declarative_access_windows_entity }}"
+          Services: "{{ declarative_access_windows_services }}"
+          SnapshotDir: "{{ declarative_access_windows_snapshot_dir }}"
+          Rights: "{{ declarative_access_windows_service_rights }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][string]$Entity,
+              [Parameter(Mandatory = $true)][string[]]$Services,
+              [Parameter(Mandatory = $true)][string]$SnapshotDir,
+              [Parameter(Mandatory = $true)][string[]]$Rights
+          )
+
+          # Service-specific access mask bits (winsvc.h), with the SDDL
+          # letter each one prints as. Named here so a profile reads as a
+          # list of verbs instead of a magic hex constant.
+          $bits = @{
+              QueryConfig         = 0x0001    # CC
+              ChangeConfig        = 0x0002    # DC - rewrites ImagePath: root-equivalent
+              QueryStatus         = 0x0004    # LC
+              EnumerateDependents = 0x0008    # SW
+              Start               = 0x0010    # RP
+              Stop                = 0x0020    # WP
+              PauseContinue       = 0x0040    # DT
+              Interrogate         = 0x0080    # LO
+              UserDefinedControl  = 0x0100    # CR
+              ReadControl         = 0x20000   # RC
+          }
+          $mask = 0
+          foreach ($r in $Rights) {
+              if (-not $bits.ContainsKey($r)) {
+                  throw ("unknown service right '$r' - valid names: " + (($bits.Keys | Sort-Object) -join ', '))
+              }
+              $mask = $mask -bor $bits[$r]
+          }
+
+          # This module runs with $ErrorActionPreference = 'Stop' (error_action
+          # above). In Windows PowerShell 5.1 that combination turns a NATIVE
+          # command's redirected stderr into a terminating NativeCommandError -
+          # so `& sc.exe ... 2>&1` would blow up on sc.exe's own informational
+          # output rather than letting us read the exit code. Every sc.exe call
+          # therefore goes through this helper, which drops back to Continue for
+          # the duration of the call and reports the exit code explicitly.
+          function Invoke-Sc {
+              param([Parameter(Mandatory = $true)][string[]]$ScArgs)
+              $prev = $ErrorActionPreference
+              $ErrorActionPreference = 'Continue'
+              try {
+                  $out = @(& sc.exe @ScArgs 2>&1 | ForEach-Object { $_.ToString() })
+                  $rc = $LASTEXITCODE
+              }
+              finally { $ErrorActionPreference = $prev }
+              return @{ Output = $out; ExitCode = $rc }
+          }
+
+          $sid = (New-Object System.Security.Principal.NTAccount($Entity)).Translate(
+              [System.Security.Principal.SecurityIdentifier])
+
+          if (-not (Test-Path -LiteralPath $SnapshotDir)) {
+              New-Item -Path $SnapshotDir -ItemType Directory -Force | Out-Null
+          }
+
+          $changed = $false
+          $report = @()
+          foreach ($svc in $Services) {
+              if (-not (Get-Service -Name $svc -ErrorAction SilentlyContinue)) {
+                  throw "service '$svc' does not exist on this host"
+              }
+
+              $show = Invoke-Sc -ScArgs @('sdshow', $svc)
+              $current = (($show.Output | Where-Object { $_ -match '^[DOGS]:' }) -join '').Trim()
+              if (-not $current) {
+                  throw "sc.exe sdshow $svc returned no SDDL (exit $($show.ExitCode)): $($show.Output -join ' ')"
+              }
+
+              # WRITE-ONCE snapshot of the full descriptor as sdshow printed
+              # it (DACL and SACL), because that is the evidence.
+              $snap = Join-Path $SnapshotDir "$svc.sddl"
+              $snapWritten = $false
+              if (-not (Test-Path -LiteralPath $snap)) {
+                  Set-Content -LiteralPath $snap -Value $current -Encoding ASCII -NoNewline
+                  $snapWritten = $true
+              }
+
+              # Parse -> add -> re-emit. CommonSecurityDescriptor keeps the
+              # DACL canonically ordered (deny ACEs ahead of allow ACEs), so
+              # the appended allow ACE lands in a valid position. Appending to
+              # the D: run as a string would not guarantee that.
+              $sd = New-Object System.Security.AccessControl.CommonSecurityDescriptor($false, $false, $current)
+              $have = 0
+              foreach ($ace in $sd.DiscretionaryAcl) {
+                  if ($ace.SecurityIdentifier.Value -eq $sid.Value -and
+                      $ace.AceType -eq [System.Security.AccessControl.AceType]::AccessAllowed) {
+                      $have = $have -bor $ace.AccessMask
+                  }
+              }
+              if (($have -band $mask) -eq $mask) {
+                  if ($snapWritten) { $changed = $true }
+                  $report += [ordered]@{
+                      service = $svc; action = 'already granted'
+                      snapshot = $snap; snapshot_written = $snapWritten
+                  }
+                  continue
+              }
+
+              $sd.DiscretionaryAcl.AddAccess(
+                  [System.Security.AccessControl.AccessControlType]::Allow,
+                  $sid,
+                  $mask,
+                  [System.Security.AccessControl.InheritanceFlags]::None,
+                  [System.Security.AccessControl.PropagationFlags]::None)
+
+              # Access = DACL only. The SACL is left untouched on purpose.
+              $new = $sd.GetSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
+              $set = Invoke-Sc -ScArgs @('sdset', $svc, $new)
+              if ($set.ExitCode -ne 0) {
+                  throw "sc.exe sdset $svc failed (exit $($set.ExitCode)): $($set.Output -join ' ')"
+              }
+              $changed = $true
+              $report += [ordered]@{
+                  service = $svc; action = 'granted'
+                  before = $current; after = $new
+                  snapshot = $snap; snapshot_written = $snapWritten
+              }
+          }
+
+          $Ansible.Changed = $changed
+          $Ansible.Result = @{
+              services = $report
+              sid = $sid.Value
+              mask = ('0x{0:X}' -f $mask)
+              rights = $Rights
+          }
+      register: declarative_access_windows_sdset_result
+
+    - name: service_sdset - Debug service grants
+      ansible.builtin.debug:
+        var: declarative_access_windows_sdset_result.result
+      when: declarative_access_windows_debug | default(false) | bool

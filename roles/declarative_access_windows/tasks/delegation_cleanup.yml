@@ -1,0 +1,85 @@
+---
+# Undo the feature-delegation changes this profile made.
+#
+# Runs only with --tags cleanup, and needs the same
+# declarative_access_windows_delegation mapping the apply side used.
+#
+# RESTORE ORDER:
+#   1. the value recorded in <profile>-delegation.json, if the section has one
+#      - that is the OverrideMode this host actually shipped with;
+#   2. otherwise declarative_access_windows_delegation_cleanup_mode (Deny).
+#
+# Falling back to Deny is correct for most system.webServer sections but NOT
+# all of them: defaultDocument, directoryBrowse, httpRedirect and
+# httpProtocol ship as Allow. A cleanup that reset those to Deny would leave
+# the host tighter than the vendor shipped it and silently break an unrelated
+# site's web.config. The snapshot is what avoids that, which is why the apply
+# side writes it before the first change.
+
+- name: delegation cleanup
+  when: (declarative_access_windows_delegation | default({}, true)) | length > 0
+  block:
+    - name: delegation cleanup - Restore section override modes
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Sections: >-
+            {{ (declarative_access_windows_delegation.read_write | default([]))
+               + (declarative_access_windows_delegation.read_only | default([])) }}
+          SnapshotPath: >-
+            {{ declarative_access_windows_snapshot_dir }}\{{
+            declarative_access_windows_profile_name }}-delegation.json
+          FallbackMode: "{{ declarative_access_windows_delegation_cleanup_mode }}"
+        script: |
+          param(
+              [string[]]$Sections = @(),
+              [Parameter(Mandatory = $true)][string]$SnapshotPath,
+              [Parameter(Mandatory = $true)][string]$FallbackMode
+          )
+
+          $mwa = Join-Path $env:windir 'system32\inetsrv\Microsoft.Web.Administration.dll'
+          if (-not (Test-Path -LiteralPath $mwa)) {
+              # IIS is gone - nothing to restore.
+              $Ansible.Changed = $false
+              $Ansible.Result = @{ restored = @(); note = 'IIS not installed' }
+          }
+          else {
+              [void][System.Reflection.Assembly]::LoadFrom($mwa)
+
+              $snapshot = @{}
+              if (Test-Path -LiteralPath $SnapshotPath) {
+                  (Get-Content -LiteralPath $SnapshotPath -Raw | ConvertFrom-Json).PSObject.Properties |
+                      ForEach-Object { $snapshot[$_.Name] = $_.Value }
+              }
+
+              $sm = New-Object Microsoft.Web.Administration.ServerManager
+              $cfg = $sm.GetApplicationHostConfiguration()
+
+              $restored = @()
+              foreach ($sectionPath in $Sections) {
+                  $target = if ($snapshot.ContainsKey($sectionPath)) { $snapshot[$sectionPath] } else { $FallbackMode }
+                  $section = $cfg.GetSection($sectionPath)
+                  $current = $section.OverrideMode.ToString()
+                  if ($current -ne $target) {
+                      $section.OverrideMode = [Microsoft.Web.Administration.OverrideMode]$target
+                      $restored += [ordered]@{
+                          section = $sectionPath
+                          from = $current
+                          to = $target
+                          source = $(if ($snapshot.ContainsKey($sectionPath)) { 'snapshot' } else { 'fallback' })
+                      }
+                  }
+              }
+              if ($restored.Count -gt 0) { $sm.CommitChanges() }
+
+              $Ansible.Changed = ($restored.Count -gt 0)
+              $Ansible.Result = @{ restored = $restored; snapshot = $SnapshotPath }
+          }
+      register: declarative_access_windows_delegation_cleanup_result
+
+    - name: delegation cleanup - Debug restored override modes
+      ansible.builtin.debug:
+        var: declarative_access_windows_delegation_cleanup_result.result
+      when: declarative_access_windows_debug | default(false) | bool
+  # Runs only when --tags cleanup is applied

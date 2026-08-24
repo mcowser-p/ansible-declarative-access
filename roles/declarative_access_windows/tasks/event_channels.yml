@@ -1,0 +1,57 @@
+---
+# Event log read access - the `journalctl -u <unit>` row of the Linux role.
+#
+# declarative_access_windows_event_channels names the channels the grant is
+# FOR (System, Application, Microsoft-Windows-IIS-Logging/Logs,
+# Microsoft-Windows-CAPI2/Operational for TLS diagnostics, ...). The
+# mechanism granted is membership in the builtin Event Log Readers group,
+# which covers every channel whose ACL admits that group - so the list is the
+# record of intent, and the group is the enforcement.
+#
+###########################################################################
+# WHY NOT PER-CHANNEL `wevtutil sl <channel> /ca:<sddl>`
+#
+# Per-channel ACLs are genuinely finer-grained - they are the only way to say
+# "this group may read the IIS channel and nothing else" - and they are the
+# right answer on a multi-tenant host. They are NOT the default here for four
+# reasons, all of which are properties of the mechanism rather than
+# preferences:
+#
+#   1. `/ca:` REPLACES the channel's SDDL rather than merging into it, with
+#      the same hazard as an NTFS DACL replace and none of the snapshot
+#      machinery: there is no per-channel `sdshow` to capture first beyond
+#      `wevtutil gl <channel>`, and the value is not stable across builds.
+#   2. Channel ACLs live in the channel's registry configuration, and a
+#      servicing update that re-creates the channel silently drops them - a
+#      grant that evaporates on patch Tuesday is worse than a coarse grant
+#      that does not.
+#   3. Some channels (Security in particular) do not accept a channel-level
+#      ACL change at all; that one is governed by SeSecurityPrivilege and the
+#      Manage Auditing and Security Log user right.
+#   4. Event Log Readers is what Microsoft ships for this, it is a single
+#      reversible group membership, and on a single-tenant host - our support
+#      boundary - "can read the logs" is the intended grant anyway.
+#
+# If a host does need per-channel scoping, do it deliberately outside this
+# role and record the pre-change SDDL from `wevtutil gl <channel>` first.
+###########################################################################
+
+- name: event_channels
+  when: declarative_access_windows_event_channels | default([]) | length > 0
+  block:
+    - name: event_channels - Add the entity to Event Log Readers
+      ansible.windows.win_group_membership:
+        name: "{{ declarative_access_windows_event_log_readers_group }}"
+        members:
+          - "{{ declarative_access_windows_entity }}"
+        state: present
+
+    - name: event_channels - Record which channels this grant is for
+      ansible.builtin.debug:
+        msg: >-
+          {{ declarative_access_windows_entity }} added to
+          "{{ declarative_access_windows_event_log_readers_group }}" for channels:
+          {{ declarative_access_windows_event_channels | join(', ') }}.
+          The group grants read on every channel that admits it, which is
+          broader than the list - see the header of this task file.
+      when: declarative_access_windows_debug | default(false) | bool

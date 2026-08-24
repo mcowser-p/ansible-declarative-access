@@ -1,0 +1,41 @@
+#jinja2: trim_blocks: True, lstrip_blocks: False
+# {{ ansible_managed }}
+#
+# JEA session configuration for the "{{ declarative_access_windows_profile_name }}" access profile.
+#
+# SessionType = RestrictedRemoteServer puts the session in NoLanguage mode
+# with only the seven JEA housekeeping cmdlets available; everything else the
+# caller can reach comes from the role capability's FunctionDefinitions.
+#
+# RunAsVirtualAccount = $true means the operations run under a per-session
+# virtual account (local Administrators on a member server), NOT under the
+# caller's token. That is the JEA model and it is the point: the caller never
+# holds admin rights, and cannot get them, because the only things the
+# session will accept are the profile's proxy functions. It is also why the
+# function catalogue is closed and every parameter is constrained.
+@{
+    SchemaVersion = '2.0.0.0'
+    GUID = '7c1e5b93-2a48-4f16-8d05-b9e3c47a6d21'
+    Author = 'declarative_access_windows'
+    Description = 'Constrained endpoint for the {{ declarative_access_windows_profile_name }} access profile.'
+
+    SessionType = 'RestrictedRemoteServer'
+    RunAsVirtualAccount = $true
+
+    # ExecutionPolicy is deliberately NOT set here. Setting it to Restricted -
+    # the value New-PSSessionConfigurationFile suggests - blocks module
+    # loading in the session, and every proxy function in the role capability
+    # starts with `Import-Module WebAdministration`. The machine policy
+    # applies instead.
+
+    # Every command a caller runs is transcribed. On a host where the team
+    # can restart the service that serves the business, the transcript is the
+    # audit trail - treat this directory as append-only.
+    TranscriptDirectory = '{{ declarative_access_windows_jea_transcript_dir }}'
+
+    RoleDefinitions = @{
+        '{{ declarative_access_windows_entity | replace("'", "''") }}' = @{
+            RoleCapabilities = '{{ declarative_access_windows_profile_name | replace("'", "''") }}'
+        }
+    }
+}

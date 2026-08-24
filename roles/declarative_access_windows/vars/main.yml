@@ -1,0 +1,51 @@
+---
+# vars file for declarative_access_windows
+#
+# Unlike the Linux role's vars/main.yml, this file is not empty: it holds the
+# few values that are ROLE FACTS rather than operator choices. They live here
+# (vars/ beats defaults/ and almost everything else in precedence) precisely
+# because overriding them from a playbook would break the role's own
+# invariants rather than tune its behaviour.
+#
+# Everything an operator or a profile is meant to set lives in
+# defaults/main.yml.
+
+# The JEA proxy functions this role knows how to emit. This mirrors the
+# `{% if 'X' in ... %}` blocks in templates/jea_role_capability.psrc.j2 and is
+# what tasks/jea.yml asserts against, so a profile naming a function that has
+# no vetted body fails the play instead of registering an endpoint that
+# exposes nothing. Adding a function means editing BOTH the template and this
+# list - deliberately, because a new proxy function is a new grant and should
+# be reviewed as one.
+declarative_access_windows_jea_catalogue:
+  - Restart-AppPool
+  - Start-AppPool
+  - Stop-AppPool
+  - Get-AppPoolStatus
+  - Start-Site
+  - Stop-Site
+  - Restart-Site
+  - Get-SiteStatus
+  - Bind-SiteCert
+
+# Which catalogue entries take a pool name and which take a site name. An
+# empty ValidateSet is a PowerShell syntax error, so jea.yml uses these to
+# assert the corresponding profile list is non-empty before templating.
+declarative_access_windows_jea_pool_functions:
+  - Restart-AppPool
+  - Start-AppPool
+  - Stop-AppPool
+  - Get-AppPoolStatus
+declarative_access_windows_jea_site_functions:
+  - Start-Site
+  - Stop-Site
+  - Restart-Site
+  - Get-SiteStatus
+  - Bind-SiteCert
+
+# Where the JEA carrier module lives. This is not a preference: JEA discovers
+# role capabilities by walking $env:PSModulePath for
+# <Module>\RoleCapabilities\<Name>.psrc, and the all-users module path is the
+# only location a machine-wide endpoint can rely on.
+declarative_access_windows_jea_module_root: >-
+  C:\Program Files\WindowsPowerShell\Modules\{{ declarative_access_windows_jea_module_name }}

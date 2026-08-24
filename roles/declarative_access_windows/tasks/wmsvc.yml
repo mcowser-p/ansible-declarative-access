@@ -1,0 +1,148 @@
+---
+# WMSVC - the vendor-native delegation path.
+#
+# The Web Management Service is what Microsoft ships for exactly this
+# problem: a non-admin connects IIS Manager to the server over HTTPS :8172
+# with their AD credentials and sees ONLY the sites they were granted and
+# only the features that were delegated to them. Everything here is in-box;
+# nothing in this file is a bespoke mechanism.
+#
+# Four things have to line up before a delegated connection works:
+#   1. the Web-Mgmt-Service feature is installed,
+#   2. EnableRemoteManagement=1 (WMSVC refuses remote connections without it),
+#   3. RequiresWindowsCredentials=1 - forces Windows identities and disables
+#      IIS Manager's own local user database, which would otherwise be a
+#      second, unmanaged credential store on the host,
+#   4. the entity holds an IIS Manager connection grant on each site.
+#
+# Step 4 is the actual delegation and is per-SITE by design: a grant on
+# site "app" gives no visibility of site "www".
+#
+# WHAT THIS DOES NOT GRANT (and why the sdset and JEA primitives exist): a
+# delegated site connection cannot recycle its application pool, edit
+# bindings, bind a certificate, or restart W3SVC/WAS. All four are
+# server-scope objects in IIS's model, not site-scope, so no amount of
+# IIS Manager delegation reaches them.
+
+- name: wmsvc
+  when: declarative_access_windows_wmsvc | default(false) | bool
+  block:
+    - name: wmsvc - Validate sites are provided
+      ansible.builtin.assert:
+        that:
+          - declarative_access_windows_sites | default([]) | length > 0
+        fail_msg: >-
+          Error: declarative_access_windows_sites must be non-empty when
+          declarative_access_windows_wmsvc is true. A connection grant is
+          made per site; with no sites there is nothing to delegate.
+        success_msg: "Sites are set, proceeding."
+
+    - name: wmsvc - Ensure the Web-Mgmt-Service feature is installed
+      ansible.windows.win_feature:
+        name: Web-Mgmt-Service
+        state: present
+        include_management_tools: true
+      register: declarative_access_windows_wmsvc_feature
+
+    - name: wmsvc - Report that the feature install wants a reboot
+      ansible.builtin.debug:
+        msg: >-
+          Web-Mgmt-Service reported reboot_required. Remote IIS Manager
+          connections may not work until this host is rebooted.
+      when: declarative_access_windows_wmsvc_feature.reboot_required | default(false) | bool
+
+    # Both values are read by WMSVC at service start, hence the handler.
+    - name: wmsvc - Enable remote management
+      ansible.windows.win_regedit:
+        path: "{{ declarative_access_windows_wmsvc_registry_path }}"
+        name: EnableRemoteManagement
+        data: 1
+        type: dword
+      notify: Restart WMSVC
+
+    - name: wmsvc - Require Windows credentials
+      ansible.windows.win_regedit:
+        path: "{{ declarative_access_windows_wmsvc_registry_path }}"
+        name: RequiresWindowsCredentials
+        data: 1
+        type: dword
+      notify: Restart WMSVC
+
+    - name: wmsvc - Ensure WMSVC starts automatically and is running
+      ansible.windows.win_service:
+        name: "{{ declarative_access_windows_wmsvc_service }}"
+        start_mode: auto
+        state: started
+
+    # administration.config (which the Grant call writes) is re-read per
+    # connection, so no service restart is needed for the grants themselves.
+    - name: wmsvc - Grant the entity an IIS Manager connection per site
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Entity: "{{ declarative_access_windows_entity }}"
+          Sites: "{{ declarative_access_windows_sites }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][string]$Entity,
+              [Parameter(Mandatory = $true)][string[]]$Sites
+          )
+
+          # Microsoft.Web.Management.dll backs IIS Manager's "IIS Manager
+          # Permissions" page. It is not on the default assembly probing
+          # path, so it is loaded by absolute path from inetsrv.
+          $inetsrv = Join-Path $env:windir 'system32\inetsrv'
+          $mgmtDll = Join-Path $inetsrv 'Microsoft.Web.Management.dll'
+          if (-not (Test-Path -LiteralPath $mgmtDll)) {
+              throw "Microsoft.Web.Management.dll not found at $mgmtDll - is the Web-Mgmt-Service feature installed?"
+          }
+          [void][System.Reflection.Assembly]::LoadFrom($mgmtDll)
+          $admDll = Join-Path $inetsrv 'Microsoft.Web.Administration.dll'
+          if (Test-Path -LiteralPath $admDll) { [void][System.Reflection.Assembly]::LoadFrom($admDll) }
+
+          $adminConfig = Join-Path $inetsrv 'config\administration.config'
+
+          function Get-ExistingGrants {
+              param([string]$SitePath)
+              # Preferred: the API's own enumeration. Its overload has
+              # varied across IIS releases, so a failure falls back to
+              # reading administration.config - the very file Grant writes -
+              # rather than guessing a signature. Either way the check is
+              # against real state, so `changed` stays accurate.
+              try {
+                  $users = [Microsoft.Web.Management.Server.ManagementAuthorization]::GetAuthorizedUsers(
+                      $SitePath, $false, 0, [int]::MaxValue)
+                  return @($users | ForEach-Object { $_.Name })
+              }
+              catch {
+                  if (-not (Test-Path -LiteralPath $adminConfig)) { return @() }
+                  $xml = [xml](Get-Content -LiteralPath $adminConfig -Raw)
+                  return @($xml.SelectNodes('//authorization/add') |
+                      Where-Object { $_.path -eq $SitePath } |
+                      ForEach-Object { $_.name })
+              }
+          }
+
+          $granted = @()
+          $already = @()
+          foreach ($site in $Sites) {
+              $existing = Get-ExistingGrants -SitePath $site
+              if (@($existing | Where-Object { $_ -eq $Entity }).Count -gt 0) {
+                  $already += $site
+                  continue
+              }
+              # isRole = $false: the name is a Windows user or group, not a
+              # role-provider role.
+              [void][Microsoft.Web.Management.Server.ManagementAuthorization]::Grant($Entity, $site, $false)
+              $granted += $site
+          }
+
+          $Ansible.Changed = ($granted.Count -gt 0)
+          $Ansible.Result = @{ granted = $granted; already_present = $already }
+      register: declarative_access_windows_wmsvc_grant
+
+    - name: wmsvc - Debug connection grants
+      ansible.builtin.debug:
+        var: declarative_access_windows_wmsvc_grant.result
+      when: declarative_access_windows_debug | default(false) | bool

@@ -1,0 +1,123 @@
+---
+# Restore each service's security descriptor from its snapshot.
+#
+# Runs only with --tags cleanup, and needs the same
+# declarative_access_windows_services list the apply side used.
+#
+# This is a VERBATIM RESTORE, not an ACE removal: sc.exe has no "remove one
+# ACE" verb, so the snapshot taken before the first grant is the undo. That
+# also means the restore reverts ANY DACL change made to the service since
+# the snapshot was taken, not just this profile's ACE. On a host where two
+# profiles granted on the same service, cleaning up the second one rolls back
+# the first as well - which is why the snapshot is per SERVICE and taken once,
+# and why a second profile's apply run leaves the existing snapshot alone.
+#
+# If the snapshot is missing (the grant was never applied from this control
+# node, or C:\bootstrap was wiped), the service is reported and left ALONE.
+# Composing a replacement descriptor from scratch is how a service ends up
+# with SYSTEM locked out of it.
+
+- name: service_sdset cleanup
+  when: declarative_access_windows_services | default([]) | length > 0
+  block:
+    - name: service_sdset cleanup - Restore the snapshotted service descriptors
+      ansible.windows.win_powershell:
+        error_action: stop
+        # win_powershell serialises $Ansible.Result to depth 2 by
+        # default, which would flatten the nested report below into
+        # strings and break attribute access on the Ansible side.
+        depth: 4
+        parameters:
+          Services: "{{ declarative_access_windows_services }}"
+          SnapshotDir: "{{ declarative_access_windows_snapshot_dir }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][string[]]$Services,
+              [Parameter(Mandatory = $true)][string]$SnapshotDir
+          )
+
+          # See the apply side for why every sc.exe call goes through this:
+          # $ErrorActionPreference = 'Stop' plus a native command's redirected
+          # stderr is a terminating NativeCommandError in PowerShell 5.1.
+          function Invoke-Sc {
+              param([Parameter(Mandatory = $true)][string[]]$ScArgs)
+              $prev = $ErrorActionPreference
+              $ErrorActionPreference = 'Continue'
+              try {
+                  $out = @(& sc.exe @ScArgs 2>&1 | ForEach-Object { $_.ToString() })
+                  $rc = $LASTEXITCODE
+              }
+              finally { $ErrorActionPreference = $prev }
+              return @{ Output = $out; ExitCode = $rc }
+          }
+
+          $changed = $false
+          $report = @()
+          foreach ($svc in $Services) {
+              $snap = Join-Path $SnapshotDir "$svc.sddl"
+              if (-not (Test-Path -LiteralPath $snap)) {
+                  $report += [ordered]@{ service = $svc; action = 'no snapshot - left alone'; snapshot = $snap }
+                  continue
+              }
+              if (-not (Get-Service -Name $svc -ErrorAction SilentlyContinue)) {
+                  $report += [ordered]@{ service = $svc; action = 'service absent'; snapshot = $snap }
+                  continue
+              }
+
+              $saved = (Get-Content -LiteralPath $snap -Raw).Trim()
+              if (-not $saved) {
+                  throw "snapshot $snap is empty - refusing to write an empty descriptor to $svc"
+              }
+
+              $show = Invoke-Sc -ScArgs @('sdshow', $svc)
+              $current = (($show.Output | Where-Object { $_ -match '^[DOGS]:' }) -join '').Trim()
+
+              # Compare and write DACLs only, matching the apply side: the
+              # SACL was never modified, so restoring it would be a change
+              # this role did not make.
+              $savedSd = New-Object System.Security.AccessControl.CommonSecurityDescriptor($false, $false, $saved)
+              $savedDacl = $savedSd.GetSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
+              $currentDacl = ''
+              if ($current) {
+                  $currentSd = New-Object System.Security.AccessControl.CommonSecurityDescriptor($false, $false, $current)
+                  $currentDacl = $currentSd.GetSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
+              }
+
+              if ($currentDacl -eq $savedDacl) {
+                  $report += [ordered]@{ service = $svc; action = 'already at snapshot state' }
+                  continue
+              }
+
+              $set = Invoke-Sc -ScArgs @('sdset', $svc, $savedDacl)
+              if ($set.ExitCode -ne 0) {
+                  throw "sc.exe sdset $svc failed (exit $($set.ExitCode)): $($set.Output -join ' ')"
+              }
+              $changed = $true
+              $report += [ordered]@{
+                  service = $svc; action = 'restored'
+                  before = $currentDacl; after = $savedDacl; snapshot = $snap
+              }
+          }
+
+          $Ansible.Changed = $changed
+          $Ansible.Result = @{ services = $report }
+      register: declarative_access_windows_sdset_cleanup_result
+
+    - name: service_sdset cleanup - Report services with no snapshot
+      ansible.builtin.debug:
+        msg: >-
+          Left alone (no snapshot to restore from):
+          {{ declarative_access_windows_sdset_cleanup_result.result.services
+             | selectattr('action', 'search', 'no snapshot')
+             | map(attribute='service') | join(', ') }}.
+          Inspect the live descriptor with `sc.exe sdshow <service>` and remove
+          the profile's ACE by hand if it is still there.
+      when: >-
+        declarative_access_windows_sdset_cleanup_result.result.services
+        | selectattr('action', 'search', 'no snapshot') | list | length > 0
+
+    - name: service_sdset cleanup - Debug restored descriptors
+      ansible.builtin.debug:
+        var: declarative_access_windows_sdset_cleanup_result.result
+      when: declarative_access_windows_debug | default(false) | bool
+  # Runs only when --tags cleanup is applied

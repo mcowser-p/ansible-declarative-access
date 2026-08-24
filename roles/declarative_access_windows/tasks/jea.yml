@@ -1,0 +1,199 @@
+---
+# JEA - Just Enough Administration.
+#
+# The last resort in the stack, and only for what the rows above genuinely
+# cannot express. IIS Manager delegation stops at the site object; a service
+# descriptor grants whole-service verbs and cannot scope to a site or a pool.
+# Recycling ONE application pool, or rebinding ONE site's certificate, falls
+# between the two - so it becomes a proxy function whose parameters are
+# constrained to the profile's own sites and pools.
+#
+# Three files make an endpoint:
+#   <ProgramFiles>\WindowsPowerShell\Modules\<module>\<module>.psd1
+#       the carrier module - JEA finds role capabilities by walking
+#       PSModulePath, so the .psrc cannot stand alone
+#   <...>\<module>\RoleCapabilities\<profile>.psrc
+#       the closed function catalogue, sites/pools baked in as ValidateSets
+#   <...>\<module>\<profile>.pssc
+#       the session configuration: RestrictedRemoteServer + virtual account,
+#       mapping the entity to that capability
+#
+# WINRM RESTART: Register-PSSessionConfiguration restarts the WinRM service,
+# which kills the connection when Ansible itself is connected over WinRM. The
+# registration below passes -NoServiceRestart, so the endpoint becomes active
+# at the next WinRM restart or reboot. Set
+# declarative_access_windows_jea_restart_winrm=true only when connected over
+# SSH (matrix-windows.yml records SSH as the 2025 automation path anyway).
+
+- name: jea
+  when:
+    - declarative_access_windows_jea | default(false) | bool
+    - declarative_access_windows_jea_functions | default([]) | length > 0
+  block:
+    ###########################################################################
+    # Validation. The function catalogue in the .psrc template is closed on
+    # purpose: an unrecognised name must fail the play, not quietly register
+    # an endpoint that exposes nothing.
+    ###########################################################################
+    - name: jea - Validate the requested functions are in the catalogue
+      ansible.builtin.assert:
+        that:
+          - >-
+            declarative_access_windows_jea_functions
+            | difference(declarative_access_windows_jea_catalogue) | length == 0
+        fail_msg: >-
+          Error: unknown JEA function(s)
+          {{ declarative_access_windows_jea_functions | difference(declarative_access_windows_jea_catalogue) | join(', ') }}.
+          Supported: {{ declarative_access_windows_jea_catalogue | join(', ') }}.
+          Add the proxy function to
+          templates/jea_role_capability.psrc.j2 (and to the catalogue in
+          vars/main.yml) before requesting it from a profile.
+        success_msg: "All requested JEA functions are in the catalogue, proceeding."
+
+    # An empty ValidateSet is a PowerShell syntax error, so a pool-scoped or
+    # site-scoped function with no names to validate against cannot be built.
+    - name: jea - Validate app pools exist for the pool-scoped functions
+      ansible.builtin.assert:
+        that:
+          - declarative_access_windows_app_pools | default([]) | length > 0
+        fail_msg: >-
+          Error: declarative_access_windows_app_pools must be non-empty when any
+          of {{ declarative_access_windows_jea_pool_functions | join(', ') }} is
+          requested - the pool names become the function's ValidateSet.
+        success_msg: "App pools are set for the pool-scoped functions, proceeding."
+      when: >-
+        declarative_access_windows_jea_functions
+        | intersect(declarative_access_windows_jea_pool_functions) | length > 0
+
+    - name: jea - Validate sites exist for the site-scoped functions
+      ansible.builtin.assert:
+        that:
+          - declarative_access_windows_sites | default([]) | length > 0
+        fail_msg: >-
+          Error: declarative_access_windows_sites must be non-empty when any of
+          {{ declarative_access_windows_jea_site_functions | join(', ') }} is
+          requested - the site names become the function's ValidateSet.
+        success_msg: "Sites are set for the site-scoped functions, proceeding."
+      when: >-
+        declarative_access_windows_jea_functions
+        | intersect(declarative_access_windows_jea_site_functions) | length > 0
+
+    - name: jea - Resolve the endpoint name
+      ansible.builtin.set_fact:
+        declarative_access_windows_jea_endpoint: >-
+          {{ declarative_access_windows_jea_endpoint_name
+             | default(declarative_access_windows_profile_name, true) }}
+
+    ###########################################################################
+    # Files
+    ###########################################################################
+    - name: jea - Ensure the carrier module directories exist
+      ansible.windows.win_file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ declarative_access_windows_jea_module_root }}"
+        - "{{ declarative_access_windows_jea_module_root }}\\RoleCapabilities"
+
+    - name: jea - Ensure the transcript directory exists
+      ansible.windows.win_file:
+        path: "{{ declarative_access_windows_jea_transcript_dir }}"
+        state: directory
+
+    - name: jea - Write the carrier module manifest
+      ansible.windows.win_template:
+        src: jea_module_manifest.psd1.j2
+        dest: >-
+          {{ declarative_access_windows_jea_module_root }}\{{
+          declarative_access_windows_jea_module_name }}.psd1
+
+    - name: jea - Write the role capability
+      ansible.windows.win_template:
+        src: jea_role_capability.psrc.j2
+        dest: >-
+          {{ declarative_access_windows_jea_module_root }}\RoleCapabilities\{{
+          declarative_access_windows_profile_name }}.psrc
+
+    - name: jea - Write the session configuration
+      ansible.windows.win_template:
+        src: jea_session_config.pssc.j2
+        dest: >-
+          {{ declarative_access_windows_jea_module_root }}\{{
+          declarative_access_windows_profile_name }}.pssc
+      register: declarative_access_windows_jea_pssc
+
+    ###########################################################################
+    # Registration
+    #
+    # The .psrc is read at SESSION START, so changing it needs no
+    # re-registration. The .pssc is baked into the WinRM plugin config at
+    # REGISTRATION time, so a changed .pssc must be re-registered - hence the
+    # ForceReregister flag wired to that template's changed state.
+    ###########################################################################
+    - name: jea - Register the session configuration
+      ansible.windows.win_powershell:
+        error_action: stop
+        depth: 4
+        parameters:
+          Name: "{{ declarative_access_windows_jea_endpoint }}"
+          Path: >-
+            {{ declarative_access_windows_jea_module_root }}\{{
+            declarative_access_windows_profile_name }}.pssc
+          ForceReregister: "{{ declarative_access_windows_jea_pssc.changed }}"
+          RestartWinRM: "{{ declarative_access_windows_jea_restart_winrm | bool }}"
+        script: |
+          param(
+              [Parameter(Mandatory = $true)][string]$Name,
+              [Parameter(Mandatory = $true)][string]$Path,
+              [string]$ForceReregister = 'false',
+              [string]$RestartWinRM = 'false'
+          )
+
+          # Taken as strings and converted explicitly. A [bool] parameter would
+          # be a silent trap: PowerShell casts the STRING 'False' to $true
+          # (non-empty string), so a flag that arrived un-typed would invert.
+          $force = [System.Convert]::ToBoolean($ForceReregister)
+          $restart = [System.Convert]::ToBoolean($RestartWinRM)
+
+          $existing = Get-PSSessionConfiguration -Name $Name -ErrorAction SilentlyContinue
+
+          if ($existing -and -not $force) {
+              $Ansible.Changed = $false
+              $Ansible.Result = @{ endpoint = $Name; action = 'already registered' }
+          }
+          else {
+              if ($existing) {
+                  # Re-registration is unregister + register: there is no
+                  # in-place update for a session configuration's .pssc.
+                  Unregister-PSSessionConfiguration -Name $Name -Force -NoServiceRestart -ErrorAction Stop
+              }
+              $regParams = @{ Name = $Name; Path = $Path; Force = $true }
+              if (-not $restart) { $regParams['NoServiceRestart'] = $true }
+              Register-PSSessionConfiguration @regParams | Out-Null
+
+              $Ansible.Changed = $true
+              $Ansible.Result = @{
+                  endpoint = $Name
+                  action = $(if ($existing) { 're-registered' } else { 'registered' })
+                  winrm_restarted = $restart
+              }
+          }
+      register: declarative_access_windows_jea_register
+
+    - name: jea - Note that the endpoint needs a WinRM restart to become active
+      ansible.builtin.debug:
+        msg: >-
+          JEA endpoint '{{ declarative_access_windows_jea_endpoint }}' was
+          registered with -NoServiceRestart, so it is not live yet. Restart
+          WinRM on the host (`Restart-Service WinRM`) or reboot, or re-run with
+          declarative_access_windows_jea_restart_winrm=true from an SSH
+          connection. Restarting WinRM from a WinRM-connected play drops the
+          connection, which is why it is not done for you.
+      when:
+        - declarative_access_windows_jea_register.changed
+        - not (declarative_access_windows_jea_restart_winrm | bool)
+
+    - name: jea - Debug endpoint registration
+      ansible.builtin.debug:
+        var: declarative_access_windows_jea_register.result
+      when: declarative_access_windows_debug | default(false) | bool
