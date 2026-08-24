@@ -80,9 +80,15 @@
             ScriptBlock = {
                 Import-Module WebAdministration -ErrorAction Stop
                 $scoped = @({% for p in declarative_access_windows_app_pools %}'{{ p | replace("'", "''") }}'{% if not loop.last %}, {% endif %}{% endfor %})
+                # No Select-Object: inside a constrained JEA session it is
+                # exposed in restricted form with a ValidateSet on -Property,
+                # so 'Select-Object Name, State' fails with "The argument
+                # 'State' does not belong to the set". Format the output here
+                # instead. (Caught by the behavioral probe, which is the first
+                # thing to ever execute this function.)
                 Get-ChildItem IIS:\AppPools |
                     Where-Object { $scoped -contains $_.Name } |
-                    Select-Object Name, State
+                    ForEach-Object { '{0}: {1}' -f $_.Name, $_.State }
             }
         }
 {% endif %}
