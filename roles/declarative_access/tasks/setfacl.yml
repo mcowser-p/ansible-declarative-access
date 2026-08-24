@@ -93,10 +93,22 @@
     declarative_access_path_parts: "{{ declarative_access_actual_path.split('/')[:-1] }}"
   when: declarative_access_path_info.stat.isreg
 
+# The entity carries the AD domain suffix, exactly as pam_group.yml builds
+# declarative_access_pam_principal. Without it the role is internally
+# inconsistent: it maps `group@domain` into a local group at login, then tries
+# to set an ACL for the bare `group`, which setfacl cannot resolve on a host
+# where SSSD uses fully qualified names -- it fails with the singularly
+# unhelpful "Option -m: Invalid argument near character 7". An empty ad_domain
+# means a local principal and no suffix, same as pam_group.
 - name: Setting etype and entity based on variables set
   ansible.builtin.set_fact:
     declarative_access_acl_etype: "{{ 'user' if (declarative_access_acl_group | default('') | length == 0) else 'group' }}"
-    declarative_access_acl_entity: "{{ declarative_access_acl_user if (declarative_access_acl_group | default('') | length == 0) else declarative_access_acl_group }}"
+    declarative_access_acl_entity: >-
+      {{ (declarative_access_acl_user
+          if (declarative_access_acl_group | default('') | length == 0)
+          else declarative_access_acl_group)
+         + ('@' + declarative_access_ad_domain
+            if declarative_access_ad_domain | default('') | length > 0 else '') }}
 
 - name: Construct full directory paths incrementally
   ansible.builtin.set_fact:

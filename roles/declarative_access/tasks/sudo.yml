@@ -167,7 +167,16 @@
     - name: Sudoers - Allow Group Access
       community.general.sudoers:
         name: "{{ ((declarative_access_profile_name + '-') if declarative_access_profile_name is defined else '') + (declarative_access_group | regex_replace('\\.', '-') | lower) }}"
-        group: "{{ declarative_access_group | lower }}"
+        # Domain-qualified for the same reason setfacl.yml is: sudo resolves the
+        # %group in a sudoers rule through NSS, and on a host where SSSD uses
+        # fully qualified names the bare name matches nothing. The rule then
+        # sits in /etc/sudoers.d looking perfectly correct and grants nobody
+        # anything -- a silent failure, not an error. The FILENAME deliberately
+        # keeps the bare name, so the artifact stays the one the docs describe.
+        group: >-
+          {{ (declarative_access_group | lower)
+             + ('@' + declarative_access_ad_domain
+                if declarative_access_ad_domain | default('') | length > 0 else '') }}
         commands: "{{ declarative_access_sudoers_commands }}"
         nopassword: "{{ declarative_access_sudo_nopasswd }}"
         runas: "{{ declarative_access_sudo_runas }}"

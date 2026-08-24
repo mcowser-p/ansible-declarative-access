@@ -1,19 +1,74 @@
 ---
 # The golden images are CIS-hardened to PasswordAuthentication no. An AD user
 # has no key on the host, so without a scoped re-enable they cannot authenticate
-# at all -- and "SSSD works" would go untested because nobody could ever log in
-# to prove it. Match Group resolves through NSS, so an AD group name works here,
-# and local accounts keep key-only auth.
+# at all -- and "SSSD works" goes untested because nobody can log in to prove it.
+# Match Group resolves through NSS, so an AD group name works, and local
+# accounts keep key-only auth.
+
+# A drop-in is worthless if sshd never reads the directory. The hardened
+# AlmaLinux 10 image ships /etc/ssh/sshd_config with NO Include line, so
+# everything under sshd_config.d -- including cloud-init's own file -- is
+# silently ignored. Nothing errors; the setting simply never takes effect.
+- name: SSHD - is the drop-in directory actually included?
+  ansible.builtin.command:
+    argv: [grep, -qiE, '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/', /etc/ssh/sshd_config]
+  register: ad_join_sshd_include
+  changed_when: false
+  failed_when: false
+
+# Prepended, not appended: sshd takes the FIRST value it obtains for a global
+# keyword, so an Include at the bottom would be shadowed by everything above it.
+# Match blocks inside the drop-in still override globals for matching
+# connections, which is what makes the scoped re-enable work.
+- name: SSHD - include the drop-in directory
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    line: "Include /etc/ssh/sshd_config.d/*.conf"
+    insertbefore: BOF
+    firstmatch: true
+    state: present
+    backup: true
+    validate: /usr/sbin/sshd -t -f %s
+  when: ad_join_sshd_include.rc != 0
+  notify: Restart sshd
+
+- name: SSHD - the drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Match Group resolves the group through NSS, so the name has to be spelled the
+# way NSS reports it. With use_fully_qualified_names the AD group is
+# `<group>@<domain>`, and a bare name silently matches nothing -- sshd offers no
+# password method, the client sees only publickey, and the whole thing looks
+# like the account is wrong rather than the config. Same fully-qualified-name
+# trap as the sudoers %group and the setfacl entity.
 - name: SSHD - allow password auth for the named AD groups
   ansible.builtin.copy:
     dest: /etc/ssh/sshd_config.d/60-ad-join.conf
     owner: root
     group: root
     mode: "0600"
-    validate: /usr/sbin/sshd -t -f %s
     content: |
       # Managed by the ad_join role.
-      Match Group {{ ad_join_sshd_password_auth_groups | join(',') }}
+      Match Group {{ _groups | join(',') }}
           PasswordAuthentication yes
           KbdInteractiveAuthentication yes
+  vars:
+    _groups: >-
+      {{ ad_join_sshd_password_auth_groups
+         | map('regex_replace', '$', ('@' ~ ad_join_domain) if ad_join_use_fqns else '')
+         | list }}
   notify: Restart sshd
+
+# sshd -T -C takes user/host/addr/laddr/lport, and derives group membership
+# from the user -- there is no `group=` key -- so a generic effective-config
+# check is not possible here without inventing a member. Validate the syntax
+# instead; tests/authtest.sh proves the behaviour with a real principal.
+- name: SSHD - the configuration still parses
+  ansible.builtin.command:
+    argv: [sshd, -t]
+  changed_when: false
