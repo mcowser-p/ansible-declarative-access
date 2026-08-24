@@ -2,12 +2,13 @@
 # Configure PAM group.conf for default admin-level access
 #
 # This playbook configures /etc/security/group.conf to map AD admin groups
-# to the local wheel group, providing sudo/admin access to authorized users.
+# to the local admin group (wheel on RHEL family, sudo on Debian family),
+# providing sudo/admin access to authorized users.
 #
 # Domain Group Naming Standard:
-#   - {hostname}-app_full           -> mapped to wheel group + SSH access
-#   - {hostname}-admin_full         -> mapped to wheel group + SSH access
-#   - {hostname}-app_restricted     -> SSH access only (no wheel group)
+#   - {hostname}-app_full           -> mapped to admin group + SSH access
+#   - {hostname}-admin_full         -> mapped to admin group + SSH access
+#   - {hostname}-app_restricted     -> SSH access only (no admin group)
 #
 # SIMPLE USAGE (uses inventory hostname):
 # ansible-playbook -i inventory playbooks/2_configure_default_pam_access.yml
@@ -37,7 +38,11 @@
     pam_sshd_file: "/etc/pam.d/sshd"
 
     # Local group for admin access
-    admin_local_group: "wheel"
+    # wheel on the RHEL family, sudo on the Debian family. This was hardcoded to
+    # "wheel", which made the playbook hard-fail on Ubuntu 24.04/26.04 -- the
+    # group simply does not exist there -- even though the profiles library
+    # covers both. Override explicitly for a host that uses something else.
+    admin_local_group: "{{ 'sudo' if ansible_facts['os_family'] == 'Debian' else 'wheel' }}"
 
     # AD domain suffix
     ad_domain: "example.com"
@@ -163,21 +168,26 @@
             insertafter: "^# /etc/security/group.conf"
             create: true
 
-        - name: Verify wheel group exists
+        - name: Verify the local admin group exists
           ansible.builtin.getent:
             database: group
             key: "{{ admin_local_group }}"
             fail_key: false
           register: wheel_group_check
 
-        - name: Fail if wheel group does not exist
+        - name: Fail if the local admin group does not exist
           ansible.builtin.fail:
             msg: |
               ERROR: Local group '{{ admin_local_group }}' does not exist!
 
-              The wheel group is required for admin access and should exist on all RHEL/AlmaLinux systems.
+              pam_group maps the AD admin tiers into this local group, so it has
+              to exist before the mapping means anything. It ships as 'wheel' on
+              the RHEL family and 'sudo' on the Debian family; this host is
+              {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+              ({{ ansible_facts['os_family'] }} family), so '{{ admin_local_group }}' was expected.
 
-              Please create the group first:
+              Create it, or override admin_local_group if this host uses a
+              different convention:
                 sudo groupadd {{ admin_local_group }}
 
               After creating the group, re-run this playbook.
