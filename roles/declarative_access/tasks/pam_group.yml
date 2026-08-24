@@ -103,7 +103,9 @@
     - name: pam_group - Add group membership entries to group.conf
       ansible.builtin.lineinfile:
         path: "{{ declarative_access_group_conf_file }}"
-        line: "sshd;!tty*;{{ declarative_access_pam_principal }};Al0000-2400;{{ item }}"
+        line: >-
+          {{ '*;*' if declarative_access_pam_all_services | bool else 'sshd;!tty*' }};{{
+             declarative_access_pam_principal }};Al0000-2400;{{ item }}
         # Field-anchored so principal 'dev' never matches 'dev2''s line.
         regexp: "^[^;]*;[^;]*;{{ declarative_access_pam_principal | regex_escape }};[^;]*;{{ item | regex_escape }}$"
         state: present

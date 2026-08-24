@@ -10,6 +10,19 @@
 declarative_access_login: false
 declarative_access_sudo: false
 declarative_access_pam_group: false
+
+# Which services and ttys the group.conf mapping covers. group.conf's format is
+# services;ttys;users;times;groups, and this controls the first two fields.
+#
+#   false (default) -> "sshd;!tty*"  the grant applies to SSH logins and never
+#                      at a physical console. Correct for an application admin
+#                      tier: someone who administers an app over SSH has no
+#                      reason to acquire wheel by walking up to the console.
+#   true            -> "*;*"         every service, every tty, console
+#                      included. This is what an ops / <host>-admin_full tier
+#                      needs, and it is the form auth-sleuth's group.conf check
+#                      expects for an all_services entry.
+declarative_access_pam_all_services: false
 declarative_access_linger: false
 
 # Sudo configuration
