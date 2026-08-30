@@ -440,9 +440,11 @@
         declarative_access_local_groups:
           - httpd
 
-# Applied here like any profile; verify.yml revokes it through a REAL
-# nested `ansible-playbook --tags cleanup` run (files/tagcleanup-playbook.yml)
-# to prove the cleanup/never tag wiring end to end.
+# Applied here like any profile; verify.yml first proves an UNARMED
+# `--tags cleanup` run refuses to touch it, then revokes it through a REAL
+# nested armed run (files/tagcleanup-playbook.yml with
+# -e declarative_access_force_cleanup=true) to prove the two-key cleanup
+# wiring end to end.
 - name: Test combined profile for the --tags cleanup CLI test
   hosts: all
   gather_facts: false

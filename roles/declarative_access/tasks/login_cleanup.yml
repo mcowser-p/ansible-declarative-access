@@ -18,4 +18,4 @@
       loop: "{{ declarative_access_group if declarative_access_group is iterable and declarative_access_group is not string else [declarative_access_group] }}"
       when: declarative_access_group | default('') | length > 0
 
-  # Runs only when --tags cleanup is applied
+  # Runs only when an armed --tags cleanup is applied

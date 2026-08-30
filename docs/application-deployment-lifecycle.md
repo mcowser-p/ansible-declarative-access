@@ -50,7 +50,7 @@ flowchart TD
     SS -->|monthly patching| PATCH["patch run, then<br/>treadmark files update --accept-all"]
     PATCH --> SS
     SS -->|app change window| S
-    SS -->|decommission| X["--tags cleanup (full revocation)<br/>+ AD membership + group removal"]
+    SS -->|decommission| X["armed --tags cleanup (full revocation)<br/>+ AD membership + group removal"]
 ```
 
 A team member's access over time:
@@ -66,7 +66,7 @@ stateDiagram-v2
     RestrictedAdmin: Restricted admin (app-restricted)
     RestrictedAdmin: scoped sudo on their units + ACLs on their folders, nothing else
     RestrictedAdmin --> SetupAdmin: change window (time-boxed re-elevation)
-    RestrictedAdmin --> Offboarded: AD removal + --tags cleanup
+    RestrictedAdmin --> Offboarded: AD removal + armed --tags cleanup
     Offboarded --> [*]
 ```
 
@@ -84,7 +84,7 @@ stateDiagram-v2
 | 7 | Pilot validation | One team member | Moved to app-restricted ONLY (or a test account); runs the day-2 runbook: `sudo systemctl restart <svc>`, timer + quadlet lifecycle, `sudo journalctl -u …`, config edit, log read. Gaps → back to review | Validated profile |
 | 8 | The flip | Platform + AD admin | (a) refresh baseline: `sudo treadmark files update --accept-all --config …`; (b) AD: remove user(s) from app-full, add to app-restricted; (c) enforce on host: `loginctl terminate-user <u>` (or reboot window) and `sss_cache -E` | Locked-down server |
 | 9 | Steady state | App team | Scoped admin only. Monthly patching: append `treadmark files update --accept-all` to the patch automation. App changes: time-boxed re-add to app-full → repeat 3–8 (footprint shows only the new delta) | Clean audit trail |
-| 10 | Decommission | Platform + AD admin | `…5_apply_access_profile.yml -e @<app>-access.yml -e group_name=… --tags cleanup` (revokes sudoers, group.conf, linger, **and ACLs**); remove AD memberships/groups | Clean host |
+| 10 | Decommission | Platform + AD admin | `…5_apply_access_profile.yml -e @<app>-access.yml -e group_name=… --tags cleanup -e declarative_access_force_cleanup=true` (revokes sudoers, group.conf, linger, **and ACLs**; the tag selects, the var arms); remove AD memberships/groups | Clean host |
 
 **The one manual piece** is the AD membership moves (steps 3 and 8b). They are
 deliberate approval points today; if they become friction, a small playbook
@@ -243,11 +243,12 @@ su - dev1 -c 'echo "# t" >> /etc/systemd/system/demo-maintenance.timer'  # allow
 su - dev1 -c 'cat /var/log/nginx/error.log'               # allowed via ACL
 
 # --- 7. Revoke and verify -------------------------------------------------
+# Two keys by design: --tags cleanup selects, the force var arms.
 # (--skip-tags login only because this simulated host has no realmd;
-#  real AD-joined hosts run plain --tags cleanup)
+#  real AD-joined hosts drop --skip-tags but keep both cleanup keys)
 ansible-playbook -i localhost, -c local playbooks/5_apply_access_profile.yml \
   -e @demo-access.yml -e "group_name=app-restricted-sim" \
-  --tags cleanup --skip-tags login
+  --tags cleanup -e declarative_access_force_cleanup=true --skip-tags login
 su - dev1 -c 'sudo -l'                                    # grants gone
 su - dev1 -c 'echo x >> /etc/systemd/system/demo-maintenance.timer'  # DENIED
 ```

@@ -3,8 +3,8 @@
 Ansible role for managing **Windows** application access through Active
 Directory groups. The Windows counterpart of
 [`declarative_access`](../declarative_access/README.md): same shape (one
-opt-in primitive per file, `--tags cleanup` to revoke, the receiving entity
-passed at apply time), different substrate.
+opt-in primitive per file, an armed `--tags cleanup` to revoke, the receiving
+entity passed at apply time), different substrate.
 
 | Feature | What It Does | Controlled By |
 |---------|-------------|---------------|
@@ -32,6 +32,7 @@ Galaxy / ansible-lint `var-naming[no-role-prefix]` standard).
 - [Feature Details](#feature-details)
 - [Rollback: why snapshots, not just cleanup](#rollback-why-snapshots-not-just-cleanup)
 - [Cleanup / Removing Access](#cleanup--removing-access)
+  - [Cleanup is deliberately two-key](#cleanup-is-deliberately-two-key)
 - [Differences from the Linux role](#differences-from-the-linux-role)
 - [Files and Objects Modified on Target Hosts](#files-and-objects-modified-on-target-hosts)
 - [Security Notes](#security-notes)
@@ -235,8 +236,9 @@ them. The profile describes the application; the playbook says who gets it.
 | `declarative_access_windows_service_sdset` | bool | `false` | Append service-control ACEs via `sc.exe sdset` |
 | `declarative_access_windows_jea` | bool | `false` | Template and register the JEA endpoint |
 | `declarative_access_windows_debug` | bool | `false` | Print extra detail during execution |
+| `declarative_access_windows_force_cleanup` | bool | `false` | The second key for `--tags cleanup`: the tag selects the cleanup halves, this arms them. Pass with `-e`; never persist in inventory. |
 
-> **Cleanup** is controlled via `--tags cleanup`, not a variable.
+> **Cleanup** is two-key: `--tags cleanup` selects it and `-e declarative_access_windows_force_cleanup=true` arms it — either alone does nothing. See [Cleanup / Removing Access](#cleanup--removing-access).
 
 ### Profile-supplied data
 
@@ -522,14 +524,18 @@ pre-grant state and cost a few hundred bytes each.
 
 ## Cleanup / Removing Access
 
-Cleanup is triggered exclusively via `--tags cleanup`. During a normal run,
-cleanup never happens; with `--tags cleanup`, **only** cleanup tasks run.
+Cleanup takes two keys: `--tags cleanup` **selects** the cleanup halves and
+`-e declarative_access_windows_force_cleanup=true` **arms** them. During a
+normal run, cleanup never happens; with both keys, **only** cleanup tasks
+run. With the tag but not the variable, the cleanup tasks print a refusal
+and revoke nothing — see
+[Cleanup is deliberately two-key](#cleanup-is-deliberately-two-key).
 
 ```bash
 ansible-playbook -i inventory <your-apply-playbook>.yml \
   -e @profiles/iis/windows-2022-access.yml \
   -e "declarative_access_windows_group=<hostname>-app_restricted" \
-  --tags cleanup
+  --tags cleanup -e declarative_access_windows_force_cleanup=true
 ```
 
 Re-run the **same** playbook / vars file: the cleanup halves need the same
@@ -547,6 +553,36 @@ variables.
 | Local groups | Removes the entity from each listed group. **Open sessions keep their token** until forced off. |
 | Event channels | Removes the entity from Event Log Readers. **Host-wide, not per-profile** — if another profile relies on that membership, re-apply it. (Same caveat as `linger` cleanup on Linux.) |
 | Ownership | _(no cleanup)_ — ownership is state, not a grant. |
+
+### Cleanup is deliberately two-key
+
+`--tags cleanup` **selects** the cleanup halves;
+`-e declarative_access_windows_force_cleanup=true` **arms** them. Either
+alone does nothing: without the tag, `never` keeps the tasks out of every
+normal run; without the variable, they print a refusal and touch nothing —
+recap green, grants intact.
+
+The variable exists because tags alone are not a guard. Ansible runs a
+`never`-tagged task whenever **any of its other tags** is requested, and a
+play-level `tags:` is inherited by every task the play executes. A consumer
+play carrying its own `tags: [access]`, run with `--tags access`, would
+execute the cleanup halves as its own final tasks — JEA endpoint
+unregistered, WMSVC grants revoked, group memberships removed, green recap —
+right after the apply halves granted them. This exact inheritance tore down
+freshly joined hosts through the sibling `ad_join` role before its second
+key existed. Nor does moving the tag around offer an escape:
+
+| Wrapper | Result |
+|---|---|
+| `tags:` on the play | Inherited by the cleanup tasks — trap armed |
+| `tags:` on `import_role` / `import_playbook` | Static imports inherit the same way — trap armed |
+| `tags:` on `include_role` | Applies only to the include; the role's untagged tasks are filtered out — nothing runs |
+| `include_role` with `apply: {tags: [...]}` | Pushes the tag onto the cleanup tasks — trap armed |
+
+If you need stages, prefer separate playbooks (or a variable gate) over tags
+around this collection. And keep `declarative_access_windows_force_cleanup`
+out of inventory: persisted there, it hands the trigger back to tag
+inheritance. It is a command-line key for the one run that revokes.
 
 ---
 

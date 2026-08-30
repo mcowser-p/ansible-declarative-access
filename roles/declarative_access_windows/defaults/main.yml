@@ -163,3 +163,17 @@ declarative_access_windows_jea_transcript_dir: 'C:\bootstrap\dap-jea-transcripts
 # registers with -NoServiceRestart by default; set this true only when the
 # connection is SSH (or you accept losing the session).
 declarative_access_windows_jea_restart_winrm: false
+
+###########################################################################
+# Cleanup arming
+###########################################################################
+# Second key for cleanup: `--tags cleanup` SELECTS the cleanup halves, this
+# variable ARMS them, and each alone does nothing. Tags cannot be the only
+# guard -- `never` yields to any other tag requested for a task, and play- or
+# import-level tags are inherited by every task they cover, so a consumer
+# play with its own `tags:`, run with that tag, would revoke every grant it
+# had just applied, green recap and all (ad_join lost freshly joined hosts
+# to exactly this inheritance). Pass it on the command line for the one run
+# that revokes; do not persist it in inventory, where it would hand the
+# trigger back to tag inheritance.
+declarative_access_windows_force_cleanup: false

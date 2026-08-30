@@ -1,7 +1,7 @@
 ---
 # Remove the POSIX ACLs this profile granted (the reverse of setfacl.yml).
 #
-# Runs only with --tags cleanup. Removes the entity's access ACLs from every
+# Runs only with an armed --tags cleanup. Removes the entity's access ACLs from every
 # path in the five grant lists — recursively for folders, including default
 # ACLs. Combined with the sudo/pam_group/linger cleanups, this makes
 # `--tags cleanup` a full revocation: a previously granted unit-file edit
@@ -98,4 +98,4 @@
       loop_control:
         label: "{{ item.item }}"
 
-  # Runs only when --tags cleanup is applied
+  # Runs only when an armed --tags cleanup is applied

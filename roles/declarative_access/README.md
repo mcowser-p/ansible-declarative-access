@@ -38,6 +38,7 @@ Profiles for this role can be **generated from install footprints** by treadmark
   - [Ownership (chown/chmod)](#5-ownership-chownchmod)
   - [File ACLs (SetFacl)](#6-file-acls-setfacl)
 - [Cleanup / Removing Access](#cleanup--removing-access)
+  - [Cleanup is deliberately two-key](#cleanup-is-deliberately-two-key)
 - [Application Profiles](#application-profiles)
 - [Server-Specific Group Naming Convention](#server-specific-group-naming-convention)
 - [Files Modified on Target Hosts](#files-modified-on-target-hosts)
@@ -115,7 +116,7 @@ role: declarative_access
 │   │   ├── [user set?]  → realm permit --verbose <user>
 │   │   └── [group set?] → realm permit --verbose --groups <group>
 │   │
-│   └── login_cleanup.yml  ── only runs with --tags cleanup
+│   └── login_cleanup.yml  ── only runs with armed --tags cleanup
 │       └── realm permit --withdraw for the same entity
 │
 ├── 2. SUDO
@@ -137,7 +138,7 @@ role: declarative_access
 │   │       filename: <declarative_access_profile_name>-<group|user>
 │   │       (dots replaced with dashes, lowercased)
 │   │
-│   └── sudo_cleanup.yml   ── only runs with --tags cleanup  (removes the file)
+│   └── sudo_cleanup.yml   ── only runs with armed --tags cleanup  (removes the file)
 │
 ├── 3. PAM GROUP
 │   ├── pam_group.yml      ── when: declarative_access_pam_group == true
@@ -147,7 +148,7 @@ role: declarative_access
 │   │   │   → sshd;!tty*;%<group>@<ad_domain>;Al0000-2400;<local_group>
 │   │   └── Ensure pam_group.so is in /etc/pam.d/sshd  → notify: Restart sshd
 │   │
-│   └── pam_group_cleanup.yml ── only runs with --tags cleanup
+│   └── pam_group_cleanup.yml ── only runs with armed --tags cleanup
 │
 ├── 4. LINGER
 │   ├── linger.yml         ── when: declarative_access_linger == true
@@ -155,7 +156,7 @@ role: declarative_access
 │   │       creates /var/lib/systemd/linger/<user>; the user's rootless
 │   │       services now survive logout — managed via systemctl --user, no sudo
 │   │
-│   └── linger_cleanup.yml ── only runs with --tags cleanup (disable-linger)
+│   └── linger_cleanup.yml ── only runs with armed --tags cleanup (disable-linger)
 │
 ├── 5. OWNERSHIP
 │   └── ownership.yml      ── when: declarative_access_ownership non-empty
@@ -241,8 +242,9 @@ Each feature is independent. You can enable any combination:
 | `declarative_access_pam_group` | bool | `false` | Enable temporary local group membership via PAM |
 | `declarative_access_linger` | bool | `false` | Enable lingering for `declarative_access_linger_users` |
 | `declarative_access_debug` | bool | `false` | Print additional debug output during execution |
+| `declarative_access_force_cleanup` | bool | `false` | The second key for `--tags cleanup`: the tag selects the cleanup tasks, this arms them. Pass with `-e`; never persist in inventory. |
 
-> **Cleanup** is controlled via `--tags cleanup`, not a variable. See [Cleanup / Removing Access](#cleanup--removing-access).
+> **Cleanup** is two-key: `--tags cleanup` selects it and `-e declarative_access_force_cleanup=true` arms it — either alone does nothing. See [Cleanup / Removing Access](#cleanup--removing-access).
 
 ### Sudo Options
 
@@ -536,7 +538,8 @@ declarative_access_files_exec:
   - "/usr/sbin/apachectl"
 ```
 
-**Removal:** re-running with `--tags cleanup` (same lists, same entity)
+**Removal:** re-running with `--tags cleanup
+-e declarative_access_force_cleanup=true` (same lists, same entity)
 revokes these ACLs — recursively for folders, including default ACLs. Parent
 traverse entries remain; ownership entries are never reverted. To grant a
 profile *without* an ability in the first place (e.g. read-only units), just
@@ -547,14 +550,20 @@ omit or override the corresponding list — see
 
 ## Cleanup / Removing Access
 
-Cleanup is triggered exclusively via `--tags cleanup`. During a normal run (no tags), cleanup **never** happens. When `--tags cleanup` is applied, **only** cleanup tasks run — no apply tasks execute.
+Cleanup takes two keys: `--tags cleanup` **selects** the cleanup tasks and
+`-e declarative_access_force_cleanup=true` **arms** them. During a normal run
+(no tags), cleanup never happens; with both keys, **only** cleanup tasks run —
+no apply tasks execute. With the tag but not the variable, the cleanup tasks
+print a refusal and revoke nothing. See
+[Cleanup is deliberately two-key](#cleanup-is-deliberately-two-key) for why
+the tag alone cannot be trusted.
 
 ```bash
 # Remove all access configured by a playbook
-ansible-playbook -i inventory playbook.yml --tags cleanup
+ansible-playbook -i inventory playbook.yml --tags cleanup -e declarative_access_force_cleanup=true
 
 # Remove access on specific hosts
-ansible-playbook -i inventory playbook.yml --tags cleanup -l "ps-zzzapp-tst1"
+ansible-playbook -i inventory playbook.yml --tags cleanup -e declarative_access_force_cleanup=true -l "ps-zzzapp-tst1"
 ```
 
 | Feature | What cleanup removes |
@@ -570,9 +579,50 @@ The cleanup task files are tagged `cleanup` + `never` in `main.yml`; they
 still need the entity (`declarative_access_group`/`_user`), the same ACL
 grant lists (to know which paths to revoke), and, for sudo, the same
 `declarative_access_profile_name` — in practice: re-run the same playbook /
-vars file with `--tags cleanup`. After cleanup, a previously granted
-unit-file edit is denied again (molecule proves this with a real `su` write
-attempt).
+vars file with `--tags cleanup -e declarative_access_force_cleanup=true`.
+After cleanup, a previously granted unit-file edit is denied again (molecule
+proves this with a real `su` write attempt).
+
+### Cleanup is deliberately two-key
+
+`--tags cleanup` **selects** the cleanup tasks;
+`-e declarative_access_force_cleanup=true` **arms** them. Either alone does
+nothing: without the tag, `never` keeps the tasks out of every normal run;
+without the variable, they print a refusal and touch nothing — recap green,
+grants intact.
+
+The variable exists because tags alone are not a guard. Ansible runs a
+`never`-tagged task whenever **any of its other tags** is requested, and a
+play-level `tags:` is inherited by every task the play executes. Wrap this
+role the obvious way and the trap is set:
+
+```yaml
+- hosts: linux
+  tags: [access]   # inherited: every cleanup task now carries [cleanup, never, access]
+  roles:
+    - role: mcowser_p.declarative_access.declarative_access
+```
+
+`ansible-playbook site.yml --tags access` then runs the cleanup halves as the
+play's own final tasks — sudoers file deleted, ACLs stripped, group.conf
+lines removed, green recap. The apply halves ran first, so the run *looks*
+like a grant and ends as a revocation. This exact inheritance tore down
+freshly joined hosts through the sibling `ad_join` role before its second key
+existed; here the blast radius is a locked-out app team rather than a lost
+one-time join password (re-running the profile restores the grants), but the
+recap lies identically. Nor does moving the tag around offer an escape:
+
+| Wrapper | Result |
+|---|---|
+| `tags:` on the play | Inherited by the cleanup tasks — trap armed |
+| `tags:` on `import_role` / `import_playbook` | Static imports inherit the same way — trap armed |
+| `tags:` on `include_role` | Applies only to the include; the role's untagged tasks are filtered out — nothing runs |
+| `include_role` with `apply: {tags: [...]}` | Pushes the tag onto the cleanup tasks — trap armed |
+
+If you need stages, prefer separate playbooks (or a variable gate) over tags
+around this collection. And keep `declarative_access_force_cleanup` out of
+inventory: persisted there, it hands the trigger back to tag inheritance. It
+is a command-line key for the one run that revokes.
 
 ---
 
@@ -845,7 +895,7 @@ When the same AD group needs different sudo permissions for different applicatio
 2. **Least privilege** — only list the units and commands actually needed
 3. **No wildcards** — wildcard commands are not supported for security reasons
 4. **Password required by default** — `declarative_access_sudo_nopasswd` defaults to `false`; override only when necessary
-5. **Write ACLs on unit files are root-equivalent for that unit** — editing `ExecStart=` plus `sudo systemctl restart` executes arbitrary code as root. This is a deliberate tradeoff for teams that own their applications. For a **read-only profile**, strip `declarative_access_files_modify` (and/or `declarative_access_ownership`) from the vars file, or neutralize at apply time with `-e '{"declarative_access_files_modify": []}'`; revoke an already-granted edit ability with `--tags cleanup`. See [docs/declarative-systemd-access.md](../../docs/declarative-systemd-access.md#tightening-or-revoking-a-profile)
+5. **Write ACLs on unit files are root-equivalent for that unit** — editing `ExecStart=` plus `sudo systemctl restart` executes arbitrary code as root. This is a deliberate tradeoff for teams that own their applications. For a **read-only profile**, strip `declarative_access_files_modify` (and/or `declarative_access_ownership`) from the vars file, or neutralize at apply time with `-e '{"declarative_access_files_modify": []}'`; revoke an already-granted edit ability with `--tags cleanup -e declarative_access_force_cleanup=true`. See [docs/declarative-systemd-access.md](../../docs/declarative-systemd-access.md#tightening-or-revoking-a-profile)
 6. **`daemon-reload` is system-global** — it cannot be scoped per unit and is included with any unit grant
 7. **Quadlet grants are lifecycle-only** — enable/disable/mask are omitted because generator units do not support them
 8. **Session-scoped group membership** — PAM group mappings are temporary and do not persist after logout

@@ -12,9 +12,10 @@
 # ansible-playbook -i inventory playbooks/application_profile_examples/tls-alma-linux.yml \
 #   -e "group_name=ps-certadmins"
 #
-# CLEANUP (removes all access configured by this profile):
+# CLEANUP (removes all access configured by this profile — two keys by
+# design, the tag selects and the var arms):
 # ansible-playbook -i inventory playbooks/application_profile_examples/tls-alma-linux.yml \
-#   --tags cleanup
+#   --tags cleanup -e declarative_access_force_cleanup=true
 
 - name: Grant TLS/SSL certificate administration access for Alma Linux
   hosts: "{{ target_hosts | default('all') }}"
@@ -85,4 +86,4 @@
           - "  - /var/log/audit/ (audit logs for security monitoring)"
           - ""
           - "Sudoers file: /etc/sudoers.d/tls-cert-admin-{{ (group_name if group_name else (user_name if user_name else default_group)) | regex_replace('\\.', '-') | lower }}"
-          - "To remove access: ansible-playbook ... --tags cleanup"
+          - "To remove access: ansible-playbook ... --tags cleanup -e declarative_access_force_cleanup=true"

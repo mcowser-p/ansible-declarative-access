@@ -68,7 +68,9 @@ Step by step:
        -e @myapp-access.yml -e "group_name=<hostname>-app_restricted"
    ```
 
-6. **Remove** later with the same inputs plus `--tags cleanup`.
+6. **Remove** later with the same inputs plus `--tags cleanup
+   -e declarative_access_force_cleanup=true` (the tag selects the cleanup
+   tasks, the variable arms them).
 
 ## What each grant permits on the target
 
@@ -257,7 +259,7 @@ services at session end — including ones other profiles rely on.
 - **Timer grants use the explicit `.timer` suffix only.** `systemctl start
   foo` resolves to `foo.service`, so a bare-name grant would target the wrong
   unit.
-- **`--tags cleanup` is a full revocation.** It removes the sudoers file,
+- **An armed `--tags cleanup` is a full revocation.** It removes the sudoers file,
   group.conf entries, lingering, **and the granted ACLs** (including default
   ACLs, recursively). The only thing it leaves is the parent-directory
   traverse (`rX`) entries, which are shared across profiles of the same
@@ -302,7 +304,7 @@ Note: `systemctl edit` is **never** granted — it is not in any default
 action set (services, timers, or quadlets). The only edit path is the write
 ACL above.
 
-**3. After apply — revoke with cleanup.** `--tags cleanup` removes
+**3. After apply — revoke with cleanup.** An armed `--tags cleanup` removes
 everything the profile granted in one command: the sudoers file, group.conf
 entries, lingering, **and the ACLs** — access ACLs on every listed file,
 recursive access + default ACLs on every listed folder, for the entity
@@ -310,7 +312,8 @@ passed at cleanup time:
 
 ```bash
 ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
-  -e @myapp-access.yml -e "group_name=<hostname>-app_restricted" --tags cleanup
+  -e @myapp-access.yml -e "group_name=<hostname>-app_restricted" \
+  --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 Two deliberate exceptions:

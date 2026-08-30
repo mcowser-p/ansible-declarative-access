@@ -1498,6 +1498,11 @@
 # (import_tasks + tags: [cleanup, never]) can only be proven through an
 # actual ansible-playbook run; include_role cannot pass CLI tags. The
 # nested run targets this same container over the docker connection.
+#
+# Cleanup is two-key: the tag SELECTS and declarative_access_force_cleanup
+# ARMS. Both halves are proven here — an unarmed run must refuse and revoke
+# nothing (that refusal is what makes an inherited play-level tag harmless),
+# then the armed run must fully revoke.
 ###########################################################################
 - name: Verify real --tags cleanup CLI path
   hosts: all
@@ -1522,7 +1527,9 @@
         fail_msg: "tagcleanup FAILED: converge did not set up the tagcleanup profile"
         success_msg: "tagcleanup OK: profile artifacts present before revocation"
 
-    - name: "tagcleanup: Run the real ansible-playbook --tags cleanup against this container"
+    # First key only: the tag without the arming variable must refuse and
+    # revoke nothing.
+    - name: "tagcleanup: Run --tags cleanup UNARMED (no force_cleanup) against this container"
       ansible.builtin.command:
         argv:
           - ansible-playbook
@@ -1533,6 +1540,53 @@
           - "{{ playbook_dir }}/files/tagcleanup-playbook.yml"
           - --tags
           - cleanup
+          - --skip-tags
+          - login,linger
+      environment:
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/files/nested-ansible.cfg"
+        ANSIBLE_ROLES_PATH: "{{ playbook_dir | dirname | dirname | dirname }}"
+        ANSIBLE_COLLECTIONS_PATH: "{{ lookup('env', 'HOME') }}/.ansible/collections"
+        ANSIBLE_HOME: "{{ lookup('env', 'HOME') }}/.ansible"
+      delegate_to: localhost
+      become: false
+      register: tagcleanup_unarmed_run
+      changed_when: false
+
+    - name: "tagcleanup: Stat sudoers file after the unarmed run"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/test-tagcleanup-test_group
+      register: tagcleanup_sudoers_unarmed
+
+    # Skipped tasks still print their headers under the default callback, so
+    # assert on execution evidence: the refusal's message body (printed only
+    # when the debug actually fires), a changed=0 recap, and the artifact
+    # surviving on disk.
+    - name: "tagcleanup: Assert the unarmed run refused and revoked nothing"
+      ansible.builtin.assert:
+        that:
+          - "'no access was revoked' in tagcleanup_unarmed_run.stdout"
+          - "'changed=0' in tagcleanup_unarmed_run.stdout"
+          - tagcleanup_sudoers_unarmed.stat.exists
+        fail_msg: >-
+          tagcleanup FAILED: an unarmed --tags cleanup run acted without
+          declarative_access_force_cleanup
+        success_msg: "tagcleanup OK: unarmed --tags cleanup refused; grants intact"
+
+    # Both keys: tag selects, variable arms — this is the production
+    # revocation path.
+    - name: "tagcleanup: Run the real ansible-playbook --tags cleanup (armed) against this container"
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - "{{ inventory_hostname }},"
+          - -c
+          - community.docker.docker
+          - "{{ playbook_dir }}/files/tagcleanup-playbook.yml"
+          - --tags
+          - cleanup
+          - -e
+          - declarative_access_force_cleanup=true
           - --skip-tags
           - login,linger
       environment:

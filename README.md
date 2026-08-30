@@ -33,9 +33,10 @@ sudo treadmark footprint --config treadmark-footprint-linux.yaml \
 ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
   -e @myapp-access.yml -e "group_name=<hostname>-app_restricted"
 
-# Remove later:
+# Remove later (two keys by design — the tag selects, the var arms):
 ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
-  -e @myapp-access.yml -e "group_name=<hostname>-app_restricted" --tags cleanup
+  -e @myapp-access.yml -e "group_name=<hostname>-app_restricted" \
+  --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 The team ends up able to administer exactly the systemd services, timers, and
@@ -45,7 +46,8 @@ Grants are removable at every stage: delete `declarative_access_files_modify`
 / `declarative_access_ownership` from the vars file (read-only units, no
 chown), neutralize them at apply time with `-e '{"declarative_access_files_modify": []}'`,
 or revoke everything already granted — sudoers, group.conf, lingering, **and
-the ACLs** — with `--tags cleanup`. (`systemctl edit` is never granted by any
+the ACLs** — with `--tags cleanup -e declarative_access_force_cleanup=true`.
+(`systemctl edit` is never granted by any
 default action set.) Full workflow, diagrams, security tradeoffs, and the
 tighten/revoke guide:
 [docs/declarative-systemd-access.md](docs/declarative-systemd-access.md).
@@ -134,8 +136,8 @@ ansible-playbook playbooks/application_profile_examples/nginx-webserver.yml -i i
 # Or specify custom group
 ansible-playbook playbooks/application_profile_examples/nginx-webserver.yml -e "group_name=ps-webadmins"
 
-# Cleanup access
-ansible-playbook playbooks/application_profile_examples/nginx-webserver.yml --tags cleanup
+# Cleanup access (the tag selects, the var arms)
+ansible-playbook playbooks/application_profile_examples/nginx-webserver.yml --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 Provides:
@@ -154,8 +156,8 @@ ansible-playbook playbooks/application_profile_examples/tls-alma-linux.yml -i in
 # Or specify custom group
 ansible-playbook playbooks/application_profile_examples/tls-alma-linux.yml -e "group_name=ps-certadmins"
 
-# Cleanup access
-ansible-playbook playbooks/application_profile_examples/tls-alma-linux.yml --tags cleanup
+# Cleanup access (the tag selects, the var arms)
+ansible-playbook playbooks/application_profile_examples/tls-alma-linux.yml --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 Provides:
@@ -210,15 +212,15 @@ ansible-playbook playbooks/application_profile_examples/tls-alma-linux.yml \
 
 4. **Cleanup Access**:
 ```bash
-# Remove access (uses same group logic as above)
+# Remove access (uses same group logic as above; the tag selects, the var arms)
 ansible-playbook playbooks/application_profile_examples/tls-alma-linux.yml \
-  --tags cleanup \
+  --tags cleanup -e declarative_access_force_cleanup=true \
   -i inventory
 
 # Remove access for specific group
 ansible-playbook playbooks/application_profile_examples/tls-alma-linux.yml \
   -e "group_name=ps-certadmins" \
-  --tags cleanup \
+  --tags cleanup -e declarative_access_force_cleanup=true \
   -i inventory
 ```
 
@@ -465,7 +467,7 @@ ansible-playbook -i inventory playbook.yml -vv
 
 3. **Security**:
    - Use read-only access when possible
-    - Test with --tags cleanup to verify removal
+    - Test with --tags cleanup -e declarative_access_force_cleanup=true to verify removal
    - Use specific paths instead of broad directories
    - Always include declarative_access_profile_name for tracking
 

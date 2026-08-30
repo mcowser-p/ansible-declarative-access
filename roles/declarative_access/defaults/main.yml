@@ -118,3 +118,14 @@ declarative_access_ad_domain: ""
 # Local groups the entity is mapped into at SSH login. Must be non-empty
 # when declarative_access_pam_group is true (profiles supply the values).
 declarative_access_local_groups: []
+
+# Second key for cleanup: `--tags cleanup` SELECTS the cleanup tasks, this
+# variable ARMS them, and each alone does nothing. Tags cannot be the only
+# guard -- `never` yields to any other tag requested for a task, and play- or
+# import-level tags are inherited by every task they cover, so a consumer play
+# with its own `tags:`, run with that tag, would revoke every grant it had
+# just applied, green recap and all (ad_join lost freshly joined hosts to
+# exactly this inheritance). Pass it on the command line for the one run that
+# revokes; do not persist it in inventory, where it would hand the trigger
+# back to tag inheritance.
+declarative_access_force_cleanup: false

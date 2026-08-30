@@ -26,9 +26,11 @@
 #                                 pam_group.so (requires
 #                                 -e '{"declarative_access_local_groups": [...]}')
 #
-# CLEANUP (removes the sudoers file, group.conf entries, and lingering):
+# CLEANUP (removes the sudoers file, group.conf entries, and lingering).
+# Two keys by design, the tag selects and the var arms:
 # ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
-#   -e @myapp-access.yml [-e "group_name=..."] --tags cleanup
+#   -e @myapp-access.yml [-e "group_name=..."] \
+#   --tags cleanup -e declarative_access_force_cleanup=true
 #
 # REVIEW THE VARS FILE BEFORE APPLYING — it grants write ACLs on unit files,
 # which is root-equivalent for those units when combined with sudo systemctl
@@ -86,4 +88,4 @@
           - "  Unit files writable: {{ declarative_access_files_modify | default([]) }}"
           - "  Folders modify/read: {{ declarative_access_folders_modify | default([]) }} / {{ declarative_access_folders_read | default([]) }}"
           - "  Ownership entries: {{ declarative_access_ownership | default([]) | length }}"
-          - "To remove access: re-run with --tags cleanup"
+          - "To remove access: re-run with --tags cleanup -e declarative_access_force_cleanup=true"
