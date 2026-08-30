@@ -164,16 +164,18 @@ work; the old baseline refresh in step 6 made that diff clean).
 
 ## Revocation / decommission
 
-Same inputs, plus `--tags cleanup`:
+Same inputs, plus the two cleanup keys — `--tags cleanup` selects the
+cleanup tasks, `-e declarative_access_force_cleanup=true` arms them (either
+alone does nothing):
 
 ```
 ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
   -e @<app>-access.yml -e "group_name=<hostname>-app_restricted" \
-  -l <host> --tags cleanup
+  -l <host> --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 Removes the sudoers file, `group.conf` mappings, lingering, and the ACLs
 (including defaults). Ownership is never reverted — re-chown deliberately
 if needed. `--skip-tags login` is only for simulated hosts without realmd;
-real AD hosts run plain `--tags cleanup`. Finish by removing the AD
-memberships (and the groups, at decommission).
+real AD hosts drop `--skip-tags` but still need both cleanup keys. Finish
+by removing the AD memberships (and the groups, at decommission).

@@ -12,9 +12,10 @@
 # ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webserver.yml \
 #   -e "group_name=ps-webadmins"
 #
-# CLEANUP (removes all access configured by this profile):
+# CLEANUP (removes all access configured by this profile — two keys by
+# design, the tag selects and the var arms):
 # ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webserver.yml \
-#   --tags cleanup
+#   --tags cleanup -e declarative_access_force_cleanup=true
 
 - name: Grant Nginx web server administration access
   hosts: "{{ target_hosts | default('all') }}"
@@ -92,4 +93,4 @@
           - "  - /var/log/nginx/ (nginx access and error logs)"
           - ""
           - "Sudoers file: /etc/sudoers.d/nginx-webserver-{{ (group_name if group_name else (user_name if user_name else default_group)) | regex_replace('\\.', '-') | lower }}"
-          - "To remove access: ansible-playbook ... --tags cleanup"
+          - "To remove access: ansible-playbook ... --tags cleanup -e declarative_access_force_cleanup=true"

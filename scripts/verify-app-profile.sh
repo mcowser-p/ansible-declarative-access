@@ -33,11 +33,12 @@ ansible-playbook -i localhost, -c local \
   2>&1 | grep -E "PLAY RECAP" -A1 | tail -1
 echo "===== dev's granted verbs ====="
 sudo -l -U appdev | tr "," "\n" | grep -oE "systemctl [a-z-]+ [a-zA-Z0-9@.-]+" | sort -u | head -30
-echo "===== REVOKE (real --tags cleanup path) ====="
+echo "===== REVOKE (real --tags cleanup path; the tag selects, the var arms) ====="
 ansible-playbook -i localhost, -c local \
   /opt/linux-access/playbooks/5_apply_access_profile.yml \
   -e @/opt/linux-access/examples/${PKG}-access.yml \
-  -e "group_name=${PKG}-team-sim" --tags cleanup --skip-tags login \
+  -e "group_name=${PKG}-team-sim" \
+  --tags cleanup -e declarative_access_force_cleanup=true --skip-tags login \
   2>&1 | grep -E "PLAY RECAP" -A1 | tail -1
 ls /etc/sudoers.d/ | grep -c "${PKG}" >/dev/null 2>&1 && echo "WARN sudoers survived" || echo "OK sudoers file removed"
 INNER

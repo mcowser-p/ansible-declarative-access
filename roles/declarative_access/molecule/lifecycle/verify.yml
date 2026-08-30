@@ -150,7 +150,9 @@
         success_msg: "pam OK: dev1 lands in nginx during ssh sessions only — full treadmark->profile->pam_group chain proven"
 
     ###########################################################################
-    # 5. Revoke via the REAL CLI path: --tags cleanup
+    # 5. Revoke via the REAL CLI path: --tags cleanup, armed with
+    #    declarative_access_force_cleanup (two keys: the tag selects, the
+    #    variable arms).
     #    (--skip-tags login: the sim host has no realmd; real hosts do)
     #    Two runs: the AD-shaped line (default domain) and the local line
     #    (ad_domain "") were both applied above and must both go.
@@ -161,7 +163,8 @@
         /opt/linux-access/playbooks/5_apply_access_profile.yml
         -e @/root/demo-access.yml
         -e group_name=app-restricted-sim
-        --tags cleanup --skip-tags login
+        --tags cleanup -e declarative_access_force_cleanup=true
+        --skip-tags login
       environment:
         ANSIBLE_ROLES_PATH: /opt/linux-access/roles
       register: lifecycle_revoke
@@ -174,7 +177,8 @@
         -e @/root/demo-access.yml
         -e group_name=app-restricted-sim
         -e declarative_access_ad_domain=
-        --tags cleanup --skip-tags login
+        --tags cleanup -e declarative_access_force_cleanup=true
+        --skip-tags login
       environment:
         ANSIBLE_ROLES_PATH: /opt/linux-access/roles
       register: lifecycle_revoke_local

@@ -4,8 +4,31 @@
 # Section order and shape mirror declarative_access/tasks/main.yml exactly:
 # one `include_tasks` per primitive, each immediately followed by an
 # `import_tasks <primitive>_cleanup.yml` tagged [cleanup, never]. A normal
-# run executes only the apply halves; `--tags cleanup` executes only the
-# cleanup halves.
+# run executes only the apply halves; an ARMED `--tags cleanup` run executes
+# only the cleanup halves.
+#
+# Cleanup is two-key: the [cleanup, never] tags SELECT the cleanup halves
+# and declarative_access_windows_force_cleanup (default false) ARMS them.
+# `never` is not a guard on its own -- Ansible runs a never-tagged task
+# whenever any of its OTHER tags is requested, and a play- or import-level
+# `tags:` is inherited by every task it covers, so a consumer play carrying
+# its own tag would revoke every grant it had just applied, green recap and
+# all. An unarmed selection hits the refusal below and touches nothing.
+
+- name: Cleanup - refuse to act while unarmed
+  ansible.builtin.debug:
+    msg: >-
+      declarative_access_windows cleanup tasks were selected by tags, but
+      declarative_access_windows_force_cleanup is false, so no access was
+      revoked. Meant it? Re-run with
+      '-e declarative_access_windows_force_cleanup=true'. Did not ask for
+      cleanup? Then a play- or import-level `tags:` on the consuming playbook
+      is being inherited by these never-tagged tasks -- see "Cleanup is
+      deliberately two-key" in this role's README.
+  when: not (declarative_access_windows_force_cleanup | bool)
+  tags:
+    - cleanup
+    - never
 
 ###########################################################################
 # Entity - resolve the single principal every grant is made to
@@ -20,6 +43,7 @@
 
 - name: Entity for cleanup
   ansible.builtin.import_tasks: entity.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -33,6 +57,7 @@
 
 - name: WMSVC cleanup
   ansible.builtin.import_tasks: wmsvc_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -46,6 +71,7 @@
 
 - name: Delegation cleanup
   ansible.builtin.import_tasks: delegation_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -58,6 +84,7 @@
 
 - name: NTFS cleanup
   ansible.builtin.import_tasks: ntfs_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -70,6 +97,7 @@
 
 - name: Certificate keys cleanup
   ansible.builtin.import_tasks: certkey_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -84,6 +112,7 @@
 
 - name: Service SDDL cleanup
   ansible.builtin.import_tasks: service_sdset_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -97,6 +126,7 @@
 
 - name: JEA cleanup
   ansible.builtin.import_tasks: jea_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -109,6 +139,7 @@
 
 - name: Local groups cleanup
   ansible.builtin.import_tasks: local_groups_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -121,6 +152,7 @@
 
 - name: Event channels cleanup
   ansible.builtin.import_tasks: event_channels_cleanup.yml
+  when: declarative_access_windows_force_cleanup | bool
   tags:
     - cleanup
     - never

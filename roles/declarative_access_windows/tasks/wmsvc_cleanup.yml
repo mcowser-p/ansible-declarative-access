@@ -1,9 +1,9 @@
 ---
 # Revoke the IIS Manager connection grants this profile made.
 #
-# Runs only with --tags cleanup, and needs the same entity and the same
+# Runs only with an armed --tags cleanup, and needs the same entity and the same
 # declarative_access_windows_sites list the apply side used - in practice:
-# re-run the same playbook / vars file with --tags cleanup.
+# re-run the same playbook / vars file with an armed --tags cleanup.
 #
 # Deliberately LEFT in place: the Web-Mgmt-Service feature, the two registry
 # values, and the WMSVC service itself. They are host posture shared by every
@@ -83,4 +83,4 @@
       ansible.builtin.debug:
         var: declarative_access_windows_wmsvc_revoke.result
       when: declarative_access_windows_debug | default(false) | bool
-  # Runs only when --tags cleanup is applied
+  # Runs only when an armed --tags cleanup is applied

@@ -1,7 +1,7 @@
 ---
 # Restore each service's security descriptor from its snapshot.
 #
-# Runs only with --tags cleanup, and needs the same
+# Runs only with an armed --tags cleanup, and needs the same
 # declarative_access_windows_services list the apply side used.
 #
 # This is a VERBATIM RESTORE, not an ACE removal: sc.exe has no "remove one
@@ -120,4 +120,4 @@
       ansible.builtin.debug:
         var: declarative_access_windows_sdset_cleanup_result.result
       when: declarative_access_windows_debug | default(false) | bool
-  # Runs only when --tags cleanup is applied
+  # Runs only when an armed --tags cleanup is applied

@@ -1,7 +1,7 @@
 ---
 # Remove the NTFS ACEs this profile added (the reverse of ntfs.yml).
 #
-# Runs only with --tags cleanup, and needs the same entity, the same grant
+# Runs only with an armed --tags cleanup, and needs the same entity, the same grant
 # lists, and the same rights variables the apply side used - win_acl removes
 # an ACE by EXACT match (identity, rights, type, inheritance, propagation),
 # so a cleanup run with different rights values removes nothing.
@@ -92,4 +92,4 @@
            | product(declarative_access_windows_app_pools | default([])) | list }}
       loop_control:
         label: "{{ item.0 }} deny IIS AppPool\\{{ item.1 }}"
-  # Runs only when --tags cleanup is applied
+  # Runs only when an armed --tags cleanup is applied

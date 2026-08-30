@@ -51,19 +51,22 @@ ansible-playbook -i inventory playbooks/application_profile_examples/tls-alma-li
 
 ### 3. Cleanup Access
 
-Cleanup is triggered by adding `--tags cleanup` to the playbook command. When applied, only cleanup tasks run -- no access is granted.
+Cleanup takes two keys: `--tags cleanup` selects the cleanup tasks and
+`-e declarative_access_force_cleanup=true` arms them — either alone does
+nothing. When both are applied, only cleanup tasks run -- no access is
+granted.
 
 **Remove all access for the default group:**
 ```bash
 ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webserver.yml \
-  --tags cleanup
+  --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 **Remove access for a specific group:**
 ```bash
 ansible-playbook -i inventory playbooks/application_profile_examples/nginx-webserver.yml \
   -e "group_name=ps-webadmins" \
-  --tags cleanup
+  --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 ## Setting File Access Examples
@@ -286,10 +289,10 @@ ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
   -e @myapp-access.yml -e "group_name=ps-zzzapp-tst1-app_restricted" \
   -l "ps-zzzapp-tst1"
 
-# Remove later with the same inputs:
+# Remove later with the same inputs (the tag selects, the var arms):
 ansible-playbook -i inventory playbooks/5_apply_access_profile.yml \
   -e @myapp-access.yml -e "group_name=ps-zzzapp-tst1-app_restricted" \
-  -l "ps-zzzapp-tst1" --tags cleanup
+  -l "ps-zzzapp-tst1" --tags cleanup -e declarative_access_force_cleanup=true
 ```
 
 The team can then administer exactly the systemd services, timers, and

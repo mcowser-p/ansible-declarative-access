@@ -1,5 +1,27 @@
 ---
 # tasks file for declarative_access
+#
+# Every `import_tasks *_cleanup.yml` below is two-key: its [cleanup, never]
+# tags SELECT it and declarative_access_force_cleanup (default false) ARMS
+# it. `never` is not a guard on its own -- Ansible runs a never-tagged task
+# whenever any of its OTHER tags is requested, and a play- or import-level
+# `tags:` is inherited by every task it covers, so a consumer play carrying
+# its own tag would revoke every grant it had just applied, green recap and
+# all. An unarmed selection hits the refusal below and touches nothing.
+
+- name: Cleanup - refuse to act while unarmed
+  ansible.builtin.debug:
+    msg: >-
+      declarative_access cleanup tasks were selected by tags, but
+      declarative_access_force_cleanup is false, so no access was revoked.
+      Meant it? Re-run with '-e declarative_access_force_cleanup=true'.
+      Did not ask for cleanup? Then a play- or import-level `tags:` on the
+      consuming playbook is being inherited by these never-tagged tasks --
+      see "Cleanup is deliberately two-key" in this role's README.
+  when: not (declarative_access_force_cleanup | bool)
+  tags:
+    - cleanup
+    - never
 
 ###########################################################################
 # Login
@@ -9,6 +31,7 @@
 
 - name: Login cleanup
   ansible.builtin.import_tasks: login_cleanup.yml
+  when: declarative_access_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -21,6 +44,7 @@
 
 - name: Sudo cleanup
   ansible.builtin.import_tasks: sudo_cleanup.yml
+  when: declarative_access_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -33,6 +57,7 @@
 
 - name: PAM Group cleanup
   ansible.builtin.import_tasks: pam_group_cleanup.yml
+  when: declarative_access_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -46,6 +71,7 @@
 
 - name: Linger cleanup
   ansible.builtin.import_tasks: linger_cleanup.yml
+  when: declarative_access_force_cleanup | bool
   tags:
     - cleanup
     - never
@@ -151,6 +177,7 @@
 
 - name: SetFacl cleanup
   ansible.builtin.import_tasks: setfacl_cleanup.yml
+  when: declarative_access_force_cleanup | bool
   tags:
     - cleanup
     - never

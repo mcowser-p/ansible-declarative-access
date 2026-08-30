@@ -211,7 +211,8 @@ we adding on" list to review:
 The sudoers file is a real new file on the host — when you re-footprint the
 finished server against the OS baseline, treadmark captures it (with its full
 contents) in `privilege.sudoers_files[]`, so the exact sudo grant is part of
-the record. `--tags cleanup` removes the sudoers file, the group.conf entry,
+the record. An armed `--tags cleanup
+-e declarative_access_force_cleanup=true` removes the sudoers file, the group.conf entry,
 and the ACLs (the ownership/chown is state, not reverted).
 
 ### After — restricted admin group
@@ -233,7 +234,7 @@ sudo systemctl daemon-reload       # after unit-related changes
 All of the above was **verified end to end** against a real running httpd:
 the seven `systemctl` verbs, the drop-in and content edits, and the log
 reads all succeed for a restricted-group member; `sshd`, `dnf install`, and
-editing the vendor unit file are all denied; and `--tags cleanup` removes
+editing the vendor unit file are all denied; and an armed `--tags cleanup` removes
 every grant while httpd keeps serving.
 
 **Gone (everything else):**
