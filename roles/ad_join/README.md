@@ -63,7 +63,47 @@ on first use so the value works exactly once:
         ad_join_one_time_password: "{{ otp_from_0_create_ad_computer }}"
 ```
 
-Leave with `-e ad_join_state=left`; full teardown with `--tags cleanup`.
+Leave with `-e ad_join_state=left`. Full teardown takes two keys, by design:
+
+```bash
+ansible-playbook site.yml --tags cleanup -e ad_join_force_cleanup=true
+```
+
+## Cleanup is deliberately two-key
+
+`--tags cleanup` **selects** the teardown tasks; `-e ad_join_force_cleanup=true`
+**arms** them. Either alone does nothing: without the tag, `never` keeps the
+tasks out of every normal run; without the variable, they print a refusal and
+touch nothing — recap green, host still joined.
+
+The variable exists because tags alone are not a guard. Ansible runs a
+`never`-tagged task whenever **any of its other tags** is requested, and a
+play-level `tags:` is inherited by every task the play executes. Wrap this role
+the obvious way and the trap is set:
+
+```yaml
+- hosts: linux
+  tags: [join]     # inherited: the teardown now carries [cleanup, never, join]
+  roles:
+    - role: mcowser_p.declarative_access.ad_join
+```
+
+`ansible-playbook site.yml --tags join` then runs the teardown as the play's
+own final tasks — `realm leave`, keytab deleted, green recap. This is not
+hypothetical; it ate three fresh joins in one afternoon before the second key
+existed. Nor does moving the tag around offer an escape:
+
+| Wrapper | Result |
+|---|---|
+| `tags:` on the play | Inherited by the teardown — trap armed |
+| `tags:` on `import_role` / `import_playbook` | Static imports inherit the same way — trap armed |
+| `tags:` on `include_role` | Applies only to the include; the role's untagged tasks are filtered out — nothing runs |
+| `include_role` with `apply: {tags: [...]}` | Pushes the tag onto the teardown — trap armed |
+
+If you need stages, prefer separate playbooks (or a variable gate) over tags
+around this collection. And keep `ad_join_force_cleanup` out of inventory:
+persisted there, it hands the trigger back to tag inheritance. It is a
+command-line key for the one run that tears down.
 
 ## Variables
 
@@ -77,6 +117,7 @@ The ones worth knowing about:
 | `ad_join_admin_group` | `sudo` on Debian, else `wheel` | The group `pam_group` maps the admin tiers into. Hardcoding `wheel` is what made playbook 2 hard-fail on Ubuntu. |
 | `ad_join_sshd_password_auth_groups` | `[]` | The golden images are CIS-hardened to key-only auth, and an AD user has no key on the host. Without a scoped `Match Group` re-enable they cannot authenticate at all. |
 | `ad_join_one_time_password` | `""` | Binds to a pre-staged object without a domain-admin credential. Requires `ad_join_computer_ou`. |
+| `ad_join_force_cleanup` | `false` | The second key for `--tags cleanup`: the tag selects the teardown, this arms it. See [Cleanup is deliberately two-key](#cleanup-is-deliberately-two-key). Pass with `-e`; never persist in inventory. |
 
 ## Notes
 

@@ -64,3 +64,11 @@ ad_join_sshd_password_auth_groups: []
 # --- lifecycle --------------------------------------------------------------
 ad_join_state: joined                               # joined | left
 ad_join_leave_remove_computer: false                # deleting the AD object needs credentials
+# Second key for the full teardown: `--tags cleanup` SELECTS the cleanup tasks,
+# this variable ARMS them, and each alone does nothing. Tags cannot be the only
+# guard -- `never` yields to any other tag requested for a task, and play- or
+# import-level tags are inherited by every task they cover, which has torn down
+# freshly joined hosts with a green recap. Pass it on the command line for the
+# one run that tears down; do not persist it in inventory, where it would hand
+# the trigger back to tag inheritance.
+ad_join_force_cleanup: false

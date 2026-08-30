@@ -6,8 +6,13 @@
 # settled here before declarative_access adds its mapping. Run this role first,
 # then create the AD groups, then apply access.
 
+# `always`, so a bare `--tags cleanup` run still learns the platform's PAM
+# manager and chrony path. Without it, cleanup died mid-teardown on an
+# undefined ad_join_pam_manager -- after the realm leave, before the config
+# removal.
 - name: Load OS-family variables
   ansible.builtin.include_vars: "{{ ansible_facts['os_family'] }}.yml"
+  tags: [always]
 
 - name: Assert
   ansible.builtin.include_tasks: assert.yml
@@ -42,6 +47,9 @@
     - name: Post-check
       ansible.builtin.include_tasks: postcheck.yml
 
+# Two keys by design: the cleanup tag selects, ad_join_force_cleanup (checked
+# inside) arms. `never` is not a guard on its own -- any inherited play- or
+# import-level tag re-requests it. cleanup.yml tells the story.
 - name: Cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags:

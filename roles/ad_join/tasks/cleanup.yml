@@ -2,8 +2,40 @@
 # Reverses this role, mirroring the *_cleanup.yml convention in
 # declarative_access. Ordering matters: leave the domain while sssd can still
 # talk to it, then take the client config away.
+#
+# Arming is two-key: `--tags cleanup` selects these tasks and
+# `-e ad_join_force_cleanup=true` lets them act. The tags were never a guard
+# by themselves. Ansible runs a `never`-tagged task whenever any of its OTHER
+# tags is requested, and a play-level (or import-level) `tags:` is inherited
+# by every task it covers -- so a consumer play tagged `tags: [join]`, run
+# with `--tags join`, executed this file as its own final tasks and
+# realm-left the host it had just joined, green recap and all. The variable
+# is the guard; the tags merely choose.
+
+- name: Cleanup - refuse to act while unarmed
+  ansible.builtin.debug:
+    msg: >-
+      ad_join's cleanup tasks were selected by tags, but ad_join_force_cleanup
+      is false, so nothing was torn down. Meant it? Re-run with
+      '-e ad_join_force_cleanup=true'. Did not ask for cleanup? Then a play-
+      or import-level `tags:` on the consuming playbook is being inherited by
+      these never-tagged tasks -- see "Cleanup is deliberately two-key" in
+      this role's README before it inherits something worse.
+  when: not (ad_join_force_cleanup | bool)
+
 - name: ad_join cleanup
+  when: ad_join_force_cleanup | bool
   block:
+    # `--tags cleanup` deselects this role's untagged asserts, so the one
+    # fact the teardown depends on is asserted again here.
+    - name: Cleanup - the domain must be named
+      ansible.builtin.assert:
+        that: ad_join_domain | length > 0
+        fail_msg: >-
+          Cleanup needs -e ad_join_domain=<domain>. Without it the realm
+          leave no-ops and the keytab is deleted from a host that is still
+          joined.
+
     - name: Cleanup - leave the domain
       ansible.builtin.include_tasks: leave.yml
 
